@@ -1,0 +1,137 @@
+[
+  {
+    "name": "Aishwarya Gune",
+    "headline": "Software Engineer @ Teambridge",
+    "company": "Teambridge",
+    "recent_posts": [
+      "Super productive session at the OpenClaw Hackathon. Mosaic took second place and turns scattered internal signals and market trends into actionable product strategy.",
+      "Had a great time at YC Agent Jam '25, where she built Crunchy Cheese, an optimized GPU scheduler for ML workloads, and won first place in the Nivara track.",
+      "Previously posted about Bestcard v1.1, including improvements for detailed earnings ordering by category."
+    ],
+    "interests": ["agents", "hackathons", "ML workloads", "GPU scheduling", "product strategy", "market intelligence", "internal signal analysis", "credit card rewards", "event streaming"],
+    "one_liner": "Software engineer at Teambridge who has recently been building agent and ML infrastructure projects, including a hackathon-winning GPU scheduler and Mosaic, a product strategy tool that placed second at OpenClaw."
+  },
+  {
+    "name": "Anjan Narla",
+    "headline": "Software engineer with 2+ years of experience building scalable, high performance systems",
+    "company": "SJSU Spartan Recreation",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public GitHub profile shows interest in Java, Spring Boot, DevOps, Flutter, and clean software design.",
+      "GitHub projects include apps such as TicketUi, MemeGenerator, trailerapp, WeatherApp, neumorphicmusicui, and restaurantFinder."
+    ],
+    "interests": ["software engineering", "Java", "Spring Boot", "DevOps", "Flutter", "mobile apps", "clean code", "scalable systems"],
+    "one_liner": "Software engineer at SJSU Spartan Recreation with experience in scalable systems and a public project footprint across Java, Spring Boot, DevOps, Flutter, and mobile app development."
+  },
+  {
+    "name": "Akshaj Uppala",
+    "headline": "SWE @ Google",
+    "company": "Google",
+    "recent_posts": [
+      "Shared that he joined Google after graduating from Purdue University with a Master's in Computer Science.",
+      "Mentioned joining Willa Chen Miller's team to work on Search products.",
+      "Coauthored work featured in Communications of the ACM on monitoring urban trees across the U.S. using generative AI."
+    ],
+    "interests": ["software engineering", "Google Search", "computer science", "generative AI", "urban visual computing", "satellite imagery", "environmental AI", "algorithms"],
+    "one_liner": "Google software engineer and Purdue CS master's graduate with research experience in generative AI for large scale urban tree monitoring."
+  },
+  {
+    "name": "Almurtada Abdella",
+    "headline": "Mechanical Engineer | Aerospace | Exploring AI & Robotics",
+    "company": "Travnr",
+    "recent_posts": [
+      "Posted about building in public around AI, travel tech, and n8n style automation.",
+      "Public portfolio highlights mechanical engineering work across CAD design, prototyping, and engineering projects.",
+      "Older posts reference internship and professional growth in engineering."
+    ],
+    "interests": ["mechanical engineering", "aerospace", "AI", "robotics", "travel tech", "CAD", "prototyping", "automation"],
+    "one_liner": "Mechanical engineer and Travnr builder exploring AI, robotics, and travel tech, with a portfolio focused on CAD design, prototyping, and engineering projects."
+  },
+  {
+    "name": "Andrii Drok",
+    "headline": "Computer Science student at San Francisco State University",
+    "company": "San Francisco State University",
+    "recent_posts": [
+      "Public LinkedIn results show posts about cybersecurity, data privacy, and Chinese app data collection.",
+      "Posted about co-packaged optics, AI factories, NVIDIA networking, and high performance AI infrastructure.",
+      "Posted about NVIDIA and UK government AI infrastructure investment."
+    ],
+    "interests": ["computer science", "cybersecurity", "data privacy", "AI infrastructure", "network engineering", "DevOps", "NVIDIA", "data centers"],
+    "one_liner": "Computer science student focused on cybersecurity, network engineering, DevOps, and AI infrastructure topics like data center networking and co-packaged optics."
+  },
+  {
+    "name": "Arjun Arora",
+    "headline": "Opennote (YC S25)",
+    "company": "Opennote",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public LinkedIn result points to Opennote, YC S25, and Santa Clara University.",
+      "Profile appears startup and builder focused, based on Opennote and YC context."
+    ],
+    "interests": ["startups", "education technology", "AI products", "YC", "software engineering", "builder tools", "student products"],
+    "one_liner": "Builder at Opennote, a YC S25 company, with a Santa Clara University background and a likely focus on startup product development."
+  },
+  {
+    "name": "Ayush Kumar",
+    "headline": "Software engineer at ujet.cx",
+    "company": "ujet.cx",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public LinkedIn result lists experience at ujet.cx and education at University of Maryland.",
+      "Profile is based in the San Francisco Bay Area."
+    ],
+    "interests": ["software engineering", "customer experience technology", "backend systems", "product engineering", "San Francisco tech"],
+    "one_liner": "Bay Area software engineer at ujet.cx with a University of Maryland background, likely working around customer experience or product engineering systems."
+  },
+  {
+    "name": "Buvani Pai",
+    "headline": "AI/ML Engineer",
+    "company": "XDC Global",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public profiles show AI/ML engineering focus, XDC Global experience, and Northwestern University background.",
+      "Tableau and Behance profiles suggest a mix of AI/ML, data visualization, and design oriented work."
+    ],
+    "interests": ["AI", "machine learning", "data visualization", "Tableau", "design", "computer science", "real world ML systems", "analytics"],
+    "one_liner": "AI/ML engineer at XDC Global with a Northwestern background and public work signals across machine learning, data visualization, Tableau, and design."
+  },
+  {
+    "name": "Cosmas Mandikonza",
+    "headline": "Incoming SWE intern @ LILA Sciences | Prev Production Engineering Fellow @ Meta | 5x hackathon winner",
+    "company": "LILA Sciences",
+    "recent_posts": [
+      "Published a Medium post about using TestSprite to harden SketchMotion from a demo into a more reliable product.",
+      "MIT Solve profile lists him as cofounder of BridgedAI, an AI platform for special education paperwork and personalized learning.",
+      "Notion creator profile says he builds practical AI tools and Notion systems for client delivery, workflow automation, and structured operations."
+    ],
+    "interests": ["software engineering", "AI tools", "hackathons", "workflow automation", "special education technology", "testing", "product reliability", "Notion systems", "client delivery"],
+    "one_liner": "Incoming LILA Sciences SWE intern, former Meta Production Engineering Fellow, and hackathon focused builder working on practical AI tools, product reliability, and education technology."
+  },
+  {
+    "name": "Giovanni Amenta",
+    "headline": "Innovation Engineer | Bullish on America",
+    "company": "Kasp",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public LinkedIn result describes him as pursuing world changing goals in technology, entrepreneurship, and innovation.",
+      "Company result links him to Kasp in San Francisco."
+    ],
+    "interests": ["technology", "entrepreneurship", "innovation", "startups", "San Francisco tech", "company building"],
+    "one_liner": "San Francisco based innovation engineer at Kasp focused on technology, entrepreneurship, and ambitious startup building."
+  },
+  {
+    "name": "Henry Wang",
+    "headline": "Researcher and software engineer working on people intelligence agents at Sixtyfour",
+    "company": "Sixtyfour",
+    "recent_posts": [
+      "Personal site says he is working on people intelligence agents at Sixtyfour.",
+      "Resume lists him as a Software Engineering Intern at SixtyFour AI, building workflow infrastructure for AI go to market research agents.",
+      "Personal site says he researches and builds ultra realistic AI clones and is interested in deeply individual collaborative agents."
+    ],
+    "interests": ["people intelligence agents", "AI clones", "AI workforce", "software engineering", "workflow infrastructure", "go to market research agents", "computational neuroscience", "math", "wrestling"],
+    "one_liner": "Sixtyfour engineer and UC Riverside CS student building people intelligence agents, workflow infrastructure, and ultra realistic AI clone systems."
+  }
+]
+
+
+
