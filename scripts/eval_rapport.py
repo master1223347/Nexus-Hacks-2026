@@ -23,11 +23,20 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 # Allow running as `python scripts/eval_rapport.py` from repo root.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+# Load .env so GEMINI_API_KEY etc. land in the env before app.llm imports.
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except ImportError:
+    pass
 
 from app.llm import (  # noqa: E402
     MAX_DRILL_CHARS,
@@ -93,8 +102,22 @@ def _load_attendees() -> list[dict]:
     raise SystemExit(f"unrecognized attendees.json shape at {ATTENDEES_PATH}")
 
 
-def evaluate(attendees: list[dict], goal: str, verbose: bool) -> tuple[int, int]:
-    """Return (n_pass, n_total)."""
+def evaluate(
+    attendees: list[dict],
+    goal: str,
+    verbose: bool,
+    *,
+    limit: int = 0,
+    queries_limit: int = 0,
+    throttle_s: float = 0.0,
+) -> tuple[int, int]:
+    """Return (n_pass, n_total).
+
+    limit         -> cap attendees evaluated (0 = all)
+    queries_limit -> cap queries per attendee (0 = all)
+    throttle_s    -> sleep this many seconds between LLM calls (rate limit
+                     control on free-tier Gemini)
+    """
     if not attendees:
         print(
             "[skip] data/attendees.json is empty — populate it from Pane 2 "
@@ -114,10 +137,15 @@ def evaluate(attendees: list[dict], goal: str, verbose: bool) -> tuple[int, int]
             if p:
                 all_posts.append(p)
 
-    for cand in attendees:
+    capped_attendees = attendees[:limit] if limit > 0 else attendees
+    capped_queries = (
+        RAPPORT_QUERIES[:queries_limit] if queries_limit > 0 else RAPPORT_QUERIES
+    )
+
+    for cand in capped_attendees:
         target_name = cand.get("name", "?")
 
-        for query in RAPPORT_QUERIES:
+        for query in capped_queries:
             n_total += 1
 
             # Put the target candidate first so deterministic renderers see
@@ -130,6 +158,9 @@ def evaluate(attendees: list[dict], goal: str, verbose: bool) -> tuple[int, int]
                 message=query,
                 history=[],
             )
+
+            if throttle_s > 0:
+                time.sleep(throttle_s)
 
             failures: list[str] = []
 
@@ -168,10 +199,35 @@ def main() -> int:
         help="Networking goal passed to rank_and_riff()",
     )
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Eval only the first N attendees (0 = all)",
+    )
+    ap.add_argument(
+        "--queries-limit",
+        type=int,
+        default=0,
+        help="Eval only the first N rapport queries per attendee (0 = all)",
+    )
+    ap.add_argument(
+        "--throttle",
+        type=float,
+        default=0.0,
+        help="Seconds to sleep between LLM calls (free-tier rate limit)",
+    )
     args = ap.parse_args()
 
     attendees = _load_attendees()
-    n_pass, n_total = evaluate(attendees, goal=args.goal, verbose=args.verbose)
+    n_pass, n_total = evaluate(
+        attendees,
+        goal=args.goal,
+        verbose=args.verbose,
+        limit=args.limit,
+        queries_limit=args.queries_limit,
+        throttle_s=args.throttle,
+    )
 
     if n_total == 0:
         return 0  # nothing to evaluate yet (H1)

@@ -23,6 +23,8 @@ import os
 import re
 from typing import Any
 
+from pydantic import BaseModel
+
 from app import llm_client
 from app.prompts.rank import (
     FALLBACK_REPLY,
@@ -33,6 +35,15 @@ from app.prompts.rank import (
 from app.prompts.rapport import RAPPORT_FEW_SHOT, SYSTEM_RAPPORT
 
 logger = logging.getLogger("wingman.llm")
+
+
+class _RankItem(BaseModel):
+    name: str
+    one_liner: str
+
+
+class _RankResponse(BaseModel):
+    top_3: list[_RankItem]
 
 # SMS budgets (verified by scripts/eval_rapport.py).
 MAX_LIST_CHARS = 320
@@ -154,11 +165,23 @@ def rank_and_riff(
         recent_history = list(history or [])[-MAX_HISTORY_FOR_LLM:]
         mode = _route(message=message or "", candidates=all_cands)
 
-        # Drill-in needs the full list so users can name anyone, not just the
-        # top 5. Other modes operate on the LLM-budget slice.
-        candidates_for_pick = (
-            all_cands if mode == "drill_in" else all_cands[:MAX_CANDIDATES_FOR_LLM]
-        )
+        # Per-mode candidate window:
+        #   drill_in -> JUST the named target. Cross-pollination across
+        #               attendee posts hallucinates badly otherwise.
+        #               Falls back to top-5 if we couldn't match a name.
+        #   rapport  -> wider window — rapport pick should not be constrained
+        #               to the goal-ranked top 5; matcha/boba people may rank
+        #               low for the user's stated goal but high for rapport.
+        #   initial  -> top-5 (goal-fit is the right signal here).
+        if mode == "drill_in":
+            target = _match_candidate(message=message or "", candidates=all_cands)
+            candidates_for_pick = (
+                [target] if target is not None else all_cands[:MAX_CANDIDATES_FOR_LLM]
+            )
+        elif mode == "rapport":
+            candidates_for_pick = all_cands[:10]
+        else:
+            candidates_for_pick = all_cands[:MAX_CANDIDATES_FOR_LLM]
 
         logger.info(
             "llm_route mode=%s goal_set=%s n_candidates=%d hist=%d",
@@ -226,10 +249,26 @@ def _try_llm(
     message: str,
     history: list[dict[str, str]],
 ) -> str | None:
-    """Single-call LLM dispatch. Returns SMS text or None on any failure."""
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
+    """Single-call LLM dispatch. Returns SMS text or None on any failure.
+
+    Model selection (per user instruction):
+      initial / drill_in -> gemini-2.5-flash-lite
+      rapport            -> gemini-2.5-flash  (escalate to gemini-2.5-pro
+                                               only if eval drops below 9/10)
+    """
+    if not os.environ.get("GEMINI_API_KEY", "").strip():
         return None
 
+    # Initial mode: structured JSON via flash-lite, formatted into SMS.
+    if mode == "initial":
+        return _try_llm_initial(
+            goal=goal,
+            candidates=candidates,
+            message=message,
+            history=history,
+        )
+
+    # Drill-in & rapport: free-text generation.
     system_prompt = _build_system_prompt()
     user_payload = _build_user_payload(
         mode=mode,
@@ -244,11 +283,21 @@ def _try_llm(
         {"role": "user", "content": user_payload},
     ]
 
-    # Rapport demands the most discipline (verbatim quote). Drop temp slightly
-    # to bias the model toward copying from recent_posts rather than improvising.
-    temperature = 0.4 if mode == "rapport" else 0.5
+    # Rapport demands the most discipline (verbatim quote). Lower temp biases
+    # the model toward copying from recent_posts rather than improvising.
+    if mode == "rapport":
+        model = llm_client.MODEL_RAPPORT
+        temperature = 0.4
+    else:
+        model = llm_client.MODEL_RANK
+        temperature = 0.5
 
-    reply = llm_client.chat(messages=messages, temperature=temperature, max_tokens=400)
+    reply = llm_client.chat(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=400,
+    )
     if reply is None:
         return None
 
@@ -266,12 +315,100 @@ def _try_llm(
 
     # Rapport: enforce the verbatim-quote rule at runtime. If the LLM didn't
     # actually quote a recent_post, the H1 renderer (which always quotes) is
-    # strictly safer — even if its prose is plainer.
+    # strictly safer.
     if mode == "rapport" and not _has_verbatim_quote(reply, candidates):
         logger.info("llm_reply.no_verbatim_quote mode=%s", mode)
         return None
 
     return reply
+
+
+def _try_llm_initial(
+    goal: str,
+    candidates: list[dict[str, Any]],
+    message: str,
+    history: list[dict[str, str]],
+) -> str | None:
+    """Initial-rank mode: structured JSON output, formatted into SMS.
+
+    Returns the formatted SMS reply, or None on any failure (caller falls
+    back to the H1 deterministic renderer).
+    """
+    schema = _RankResponse  # imported below; Pydantic model
+
+    system_prompt = (
+        "You are WingmanAI, a real-time networking copilot delivered over SMS.\n"
+        "Mode: INITIAL_RANK. Pick the 3 candidates from CANDIDATES that best "
+        "match the user's goal, ranked best-first. For each, write a "
+        "one_liner (≤80 chars) that names something specific to THIS person — "
+        "concrete role, recent project, or distinctive edge. Never use generic "
+        "phrases like 'works in tech', 'passionate about', 'interested in'. "
+        "Return JSON matching the schema. No prose around it."
+    )
+    user_payload = _build_user_payload(
+        mode="initial",
+        goal=goal,
+        candidates=candidates,
+        message=message,
+        history=history,
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_payload},
+    ]
+
+    parsed = llm_client.chat_structured(
+        messages=messages,
+        schema=schema,
+        model=llm_client.MODEL_RANK,
+        temperature=0.3,
+        max_tokens=400,
+    )
+    if parsed is None:
+        return None
+
+    # The SDK may hand us a parsed Pydantic model OR a raw dict.
+    items: list[dict[str, str]] = []
+    raw_items = (
+        parsed.top_3
+        if hasattr(parsed, "top_3")
+        else (parsed.get("top_3") if isinstance(parsed, dict) else None)
+    )
+    if not raw_items:
+        return None
+    for it in raw_items:
+        name = (
+            getattr(it, "name", None)
+            if not isinstance(it, dict)
+            else it.get("name")
+        )
+        one_liner = (
+            getattr(it, "one_liner", None)
+            if not isinstance(it, dict)
+            else it.get("one_liner")
+        )
+        if not name or not one_liner:
+            continue
+        items.append({"name": str(name).strip(), "one_liner": str(one_liner).strip()})
+
+    if len(items) < 3:
+        logger.info("llm_initial.short_list n=%d", len(items))
+        return None
+
+    # Reject filler-laden one_liners across the whole reply.
+    blob = " ".join(it["one_liner"].lower() for it in items)
+    for phrase in _FILLER:
+        if phrase in blob:
+            logger.info("llm_initial.filler phrase=%r", phrase)
+            return None
+
+    lines = ["Top 3 tonight:"]
+    for i, it in enumerate(items[:3], start=1):
+        one_liner = re.sub(r"\s+", " ", it["one_liner"])[:80]
+        lines.append(f"{i}) {it['name']} — {one_liner}")
+
+    body = "\n".join(lines)
+    return _truncate(body, MAX_LIST_CHARS)
 
 
 def _has_verbatim_quote(reply: str, candidates: list[dict[str, Any]]) -> bool:
@@ -335,6 +472,14 @@ def _build_user_payload(
     parts: list[str] = []
     parts.append(f"goal: {goal or '(unknown)'}")
     parts.append(f"mode_hint: {mode.upper()}")
+
+    # Drill-in: if we deterministically matched a candidate from the message,
+    # tell the LLM exactly who. Without this hint flash-lite often picks the
+    # most goal-relevant attendee instead of the one the user named.
+    if mode == "drill_in":
+        target = _match_candidate(message=message, candidates=candidates)
+        if target is not None:
+            parts.append(f"drill_target: {target.get('name', 'Unknown').strip()}")
 
     parts.append("\nCANDIDATES (top-{}):".format(len(candidates)))
     for i, cand in enumerate(candidates[:MAX_CANDIDATES_FOR_LLM], start=1):
