@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from app import llm_client
 from app.prompts.rank import (
     FALLBACK_REPLY,
+    LIMITED_MATCHES_PREAMBLE,
     NEED_MORE_DATA,
     SYSTEM_DRILL_IN,
     SYSTEM_INITIAL,
@@ -35,6 +36,16 @@ from app.prompts.rank import (
 from app.prompts.rapport import RAPPORT_FEW_SHOT, SYSTEM_RAPPORT
 
 logger = logging.getLogger("wingman.llm")
+
+# Bio one-liner cap. The system prompt asks the model to keep one_liners
+# under 100 chars; we trim defensively at the same boundary, on a word edge,
+# to keep "Cosmas Mandikonza — ..., an" truncations off the SMS.
+ONE_LINER_CAP = 100
+
+# Detects "Open with: \"<some text>\"" anywhere in the reply, with at least
+# 5 chars inside the quotes. Used to enforce the literal-opener rule for
+# rapport + drill-in replies.
+_OPENER_RE = re.compile(r'Open with:\s*"([^"\n]{5,})"', re.IGNORECASE)
 
 
 class _RankItem(BaseModel):
@@ -44,9 +55,13 @@ class _RankItem(BaseModel):
 
 class _RankResponse(BaseModel):
     top_3: list[_RankItem]
+    under_filled: bool = False
 
 # SMS budgets (verified by scripts/eval_rapport.py).
-MAX_LIST_CHARS = 320
+# MAX_LIST_CHARS bumped to 480 to fit 3 × 100-char bios + the optional
+# "Limited goal-aligned matches…" preamble. Twilio segment-merging handles
+# 3-segment messages cleanly.
+MAX_LIST_CHARS = 480
 MAX_DRILL_CHARS = 480
 MAX_RAPPORT_CHARS = 320
 
@@ -323,7 +338,87 @@ def _try_llm(
         logger.info("llm_reply.no_verbatim_quote mode=%s", mode)
         return None
 
+    # Drill-in + rapport: enforce the literal "Open with: \"…\"" opener.
+    # Topic suggestions like "Open with AI tools" don't land — the user
+    # needs a sentence they can speak. We salvage by appending a generic
+    # quoted opener if the LLM forgot, rather than discarding the reply,
+    # because the bio is usually still good.
+    if mode in ("rapport", "drill_in"):
+        reply = _ensure_quoted_opener(reply=reply, candidates=candidates)
+        # Cut anything the model emitted AFTER the quoted opener — it
+        # tends to add a second bio block that gets clipped mid-word and
+        # looks broken on the SMS. The opener is the contract; what
+        # follows is noise.
+        reply = _truncate_at_opener(reply)
+
     return reply
+
+
+def _truncate_at_opener(reply: str) -> str:
+    """Cut the reply right after the FIRST `Open with: "…"` line."""
+    m = _OPENER_RE.search(reply)
+    if not m:
+        return reply
+    end = m.end()
+    # Allow trailing whitespace/newlines but drop everything after the next
+    # newline that follows the closing quote.
+    trailing = reply[end:]
+    nl = trailing.find("\n")
+    if nl == -1:
+        return reply  # opener is the last line — nothing to trim
+    return reply[: end + nl].rstrip()
+
+
+def _ensure_quoted_opener(
+    reply: str, candidates: list[dict[str, Any]]
+) -> str:
+    """Return a reply guaranteed to end with `Open with: "…"`.
+
+    If the LLM already provided a quoted opener (≥5 chars in the quotes),
+    leave it. If not, salvage: strip any unquoted opener line and append
+    a generic quoted opener that nudges toward the most recently quoted
+    snippet in the reply (or the first recent_post we can find).
+    """
+    if _OPENER_RE.search(reply):
+        return reply
+
+    logger.info("llm_reply.opener.salvaged")
+
+    # Strip any "Open with: ..." line that doesn't contain a quoted opener,
+    # then append a salvaged one.
+    cleaned = re.sub(
+        r"\s*Open with:[^\n]*$", "", reply.rstrip(), flags=re.IGNORECASE
+    ).rstrip(" .…—")
+
+    quoted = re.search(r'"([^"]{15,})"', reply)
+    raw_hook = quoted.group(1) if quoted else _first_post_snippet(candidates)
+    # Tight hook (~6 words) so the salvaged opener stays conversational.
+    hook = " ".join((raw_hook or "").split()[:6]).rstrip(",.;:")
+
+    if hook:
+        opener = (
+            f'Open with: "Saw your post about {hook} — what got you onto that?"'
+        )
+    else:
+        opener = (
+            'Open with: "What\'s the most interesting thing you\'ve been '
+            'working on this week?"'
+        )
+
+    return f"{cleaned}.\n{opener}"
+
+
+def _first_post_snippet(candidates: list[dict[str, Any]]) -> str:
+    """Pull a short usable snippet from the first candidate with recent_posts."""
+    for cand in candidates:
+        for post in cand.get("recent_posts") or []:
+            post = (post or "").strip()
+            if len(post) >= 20:
+                # Trim to ~10 words for the salvaged opener.
+                words = post.split()[:10]
+                snippet = " ".join(words).rstrip(",.;:")
+                return snippet
+    return ""
 
 
 def _try_llm_initial(
@@ -337,17 +432,6 @@ def _try_llm_initial(
     Returns the formatted SMS reply, or None on any failure (caller falls
     back to the H1 deterministic renderer).
     """
-    schema = _RankResponse  # imported below; Pydantic model
-
-    system_prompt = (
-        "You are WingmanAI, a real-time networking copilot delivered over SMS.\n"
-        "Mode: INITIAL_RANK. Pick the 3 candidates from CANDIDATES that best "
-        "match the user's goal, ranked best-first. For each, write a "
-        "one_liner (≤80 chars) that names something specific to THIS person — "
-        "concrete role, recent project, or distinctive edge. Never use generic "
-        "phrases like 'works in tech', 'passionate about', 'interested in'. "
-        "Return JSON matching the schema. No prose around it."
-    )
     user_payload = _build_user_payload(
         mode="initial",
         goal=goal,
@@ -356,13 +440,13 @@ def _try_llm_initial(
         history=history,
     )
     messages = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": SYSTEM_INITIAL},
         {"role": "user", "content": user_payload},
     ]
 
     parsed = llm_client.chat_structured(
         messages=messages,
-        schema=schema,
+        schema=_RankResponse,
         model=llm_client.MODEL_RANK,
         temperature=0.3,
         max_tokens=400,
@@ -371,14 +455,20 @@ def _try_llm_initial(
         return None
 
     # The SDK may hand us a parsed Pydantic model OR a raw dict.
-    items: list[dict[str, str]] = []
     raw_items = (
         parsed.top_3
         if hasattr(parsed, "top_3")
         else (parsed.get("top_3") if isinstance(parsed, dict) else None)
     )
+    under_filled = bool(
+        getattr(parsed, "under_filled", False)
+        if not isinstance(parsed, dict)
+        else parsed.get("under_filled", False)
+    )
     if not raw_items:
         return None
+
+    items: list[dict[str, str]] = []
     for it in raw_items:
         name = (
             getattr(it, "name", None)
@@ -405,13 +495,75 @@ def _try_llm_initial(
             logger.info("llm_initial.filler phrase=%r", phrase)
             return None
 
-    lines = ["Top 3 tonight:"]
+    header = LIMITED_MATCHES_PREAMBLE if under_filled else ""
+    lines = [(header + "Top 3 tonight:").rstrip()]
     for i, it in enumerate(items[:3], start=1):
-        one_liner = re.sub(r"\s+", " ", it["one_liner"])[:80]
+        one_liner = _word_boundary_trim(
+            re.sub(r"\s+", " ", it["one_liner"]), ONE_LINER_CAP
+        )
         lines.append(f"{i}) {it['name']} — {one_liner}")
 
     body = "\n".join(lines)
     return _truncate(body, MAX_LIST_CHARS)
+
+
+def _word_boundary_trim(text: str, limit: int) -> str:
+    """Trim `text` to <=limit chars on a word/sentence boundary.
+
+    Never returns mid-word ("Cosmas Mandikonza — ..., an") and never returns
+    text ending on filler joiners ("and", "or", "but"). Falls back to a
+    last-space cut if no good boundary exists.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        # Still strip trailing junk in case the model itself overshot
+        # complete-sentence discipline.
+        return _strip_trailing_joiners(text)
+
+    window = text[:limit]
+    # Prefer a sentence-ish boundary first.
+    for sep in (". ", "; ", " — ", " - "):
+        idx = window.rfind(sep)
+        if idx >= int(limit * 0.5):
+            return _strip_trailing_joiners(text[:idx].rstrip())
+
+    # Otherwise the last word boundary.
+    space = window.rfind(" ")
+    if space >= int(limit * 0.5):
+        return _strip_trailing_joiners(text[:space].rstrip())
+
+    return _strip_trailing_joiners(window.rstrip())
+
+
+_TRAILING_JOINERS = {
+    "and",
+    "or",
+    "but",
+    "an",
+    "a",
+    "the",
+    "of",
+    "to",
+    "in",
+    "on",
+    "at",
+    "for",
+    "with",
+}
+
+
+def _strip_trailing_joiners(text: str) -> str:
+    """Drop trailing connector words that signal an abrupt cut."""
+    cleaned = text.rstrip(" ,;:.…—-")
+    while True:
+        parts = cleaned.rsplit(" ", 1)
+        if len(parts) < 2:
+            break
+        if parts[-1].lower() in _TRAILING_JOINERS:
+            cleaned = parts[0].rstrip(" ,;:.…—-")
+            continue
+        break
+    return cleaned
 
 
 def _has_verbatim_quote(reply: str, candidates: list[dict[str, Any]]) -> bool:
@@ -566,9 +718,10 @@ _DEMO_DRILL_MARCUS = (
 )
 
 _DEMO_RAPPORT_PRIYA = (
-    "Priya. She's been \"live-tweeting my boba shop tier list\" all week "
-    "and just posted about Laufey at the Greek. Open with boba spots in "
-    "the area."
+    'Priya. She\'s been "live-tweeting my boba shop tier list" all week '
+    'and just posted about Laufey at the Greek.\n'
+    'Open with: "Saw your boba tier list — what\'s the bar you\'re judging '
+    'on, ice or chew?"'
 )
 
 
@@ -580,7 +733,9 @@ def _h1_initial(goal: str, candidates: list[dict[str, Any]]) -> str:
     for i, cand in enumerate(candidates[:3], start=1):
         name = (cand.get("name") or "").strip() or "Unknown"
         one_liner = (cand.get("one_liner") or cand.get("headline") or "").strip()
-        one_liner = re.sub(r"\s+", " ", one_liner)[:80]
+        one_liner = _word_boundary_trim(
+            re.sub(r"\s+", " ", one_liner), ONE_LINER_CAP
+        )
         if not one_liner:
             one_liner = "in the room tonight"
         lines.append(f"{i}) {name} — {one_liner}")
@@ -612,16 +767,23 @@ def _h1_drill_in(message: str, candidates: list[dict[str, Any]]) -> str:
     if quote and len(quote) > 100:
         quote = quote[:97].rstrip() + "…"
 
+    # Tighten headline so the bio line stays demo-grade.
+    headline = _word_boundary_trim(
+        re.sub(r"\s+", " ", headline), ONE_LINER_CAP
+    )
     bio = f"{name} — {headline}." if headline else f"{name}."
     if quote:
+        # Take the first ~6 words of the quote for a tight opener hook.
+        hook_words = quote.split()[:6]
+        hook = " ".join(hook_words).rstrip(",.;:")
         body = (
-            f"{bio} Recent post: \"{quote}\". "
-            f"Open with: \"saw your post — tell me more about that?\""
+            f"{bio} Recent post: \"{quote}\".\n"
+            f'Open with: "Saw your post about {hook} — what got you onto that?"'
         )
     else:
         body = (
-            f"{bio} Worth grabbing 5 min. "
-            f"Open with: \"what are you working on right now?\""
+            f"{bio} Worth grabbing 5 min.\n"
+            f'Open with: "What are you actually working on this week?"'
         )
 
     return _truncate(body, MAX_DRILL_CHARS)
@@ -725,9 +887,11 @@ def _h1_rapport(goal: str, candidates: list[dict[str, Any]]) -> str:
     if len(words) > 12:
         quote = " ".join(words[:12])
 
+    # Tight hook (~6 words) so the salvaged opener stays conversational.
+    hook = " ".join(quote.split()[:6]).rstrip(",.;:")
     body = (
-        f"{name}. Recently posted \"{quote}\". "
-        f"Open with that — it's a real interest, not work."
+        f'{name}. Recently posted "{quote}".\n'
+        f'Open with: "Saw your post about {hook} — what got you onto that?"'
     )
     return _truncate(body, MAX_RAPPORT_CHARS)
 

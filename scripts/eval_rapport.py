@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -89,6 +90,18 @@ def _filler_present(reply: str) -> str | None:
         if phrase in lowered:
             return phrase
     return None
+
+
+_OPENER_RE = re.compile(r'Open with:\s*"([^"\n]{5,})"', re.IGNORECASE)
+
+
+def _quoted_opener_present(reply: str) -> bool:
+    """True if the reply ends with a literal `Open with: "..."` line.
+
+    Topic-only openers like 'Open with: AI tools' fail this check — the
+    user wants a sentence they can speak verbatim, not a topic suggestion.
+    """
+    return _OPENER_RE.search(reply or "") is not None
 
 
 def _load_attendees() -> list[dict]:
@@ -176,6 +189,10 @@ def evaluate(
             if not _verbatim_quote_present(reply, all_posts):
                 failures.append(
                     "no >=15-char verbatim quote from any candidate's recent_posts"
+                )
+            if not _quoted_opener_present(reply):
+                failures.append(
+                    'no literal `Open with: "..."` quoted opener line'
                 )
 
             if failures:
