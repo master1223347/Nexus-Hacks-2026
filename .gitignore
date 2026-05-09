@@ -7,4 +7,3 @@ __pycache__/
 .pytest_cache/
 
 # Real attendee data — has PII, never commit
-data/attendees.json
