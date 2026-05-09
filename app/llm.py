@@ -269,7 +269,7 @@ def _try_llm(
         )
 
     # Drill-in & rapport: free-text generation.
-    system_prompt = _build_system_prompt()
+    system_prompt = _build_system_prompt(mode=mode)
     user_payload = _build_user_payload(
         mode=mode,
         goal=goal,
@@ -283,20 +283,23 @@ def _try_llm(
         {"role": "user", "content": user_payload},
     ]
 
-    # Rapport demands the most discipline (verbatim quote). Lower temp biases
-    # the model toward copying from recent_posts rather than improvising.
+    # Rapport: lower temp + tight token budget. Output is ≤320 chars (~80
+    # tokens); 200 leaves slack but cuts wall-clock vs the old 400.
+    # Drill-in: ≤480 chars (~120 tokens); cap at 250 for the same reason.
     if mode == "rapport":
         model = llm_client.MODEL_RAPPORT
         temperature = 0.4
+        max_tokens = 200
     else:
         model = llm_client.MODEL_RANK
         temperature = 0.5
+        max_tokens = 250
 
     reply = llm_client.chat(
         messages=messages,
         model=model,
         temperature=temperature,
-        max_tokens=400,
+        max_tokens=max_tokens,
     )
     if reply is None:
         return None
@@ -427,34 +430,24 @@ def _has_verbatim_quote(reply: str, candidates: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _build_system_prompt() -> str:
-    """Compose the three per-mode rule blocks plus a routing block."""
-    routing = (
-        "Routing:\n"
-        "- If the user names a specific attendee from CANDIDATES, or starts "
-        "with phrases like 'tell me about <name>' / 'who is <name>' / 'what "
-        "about <name>' -> mode = DRILL_IN.\n"
-        "- Else if the user asks for someone fun / casual / interesting / "
-        "chill / cool / good for coffee or drinks -> mode = RAPPORT.\n"
-        "- Otherwise -> mode = INITIAL_RANK.\n"
-        "The user message includes a 'mode_hint' line — trust it unless the "
-        "message clearly contradicts it.\n"
-    )
+def _build_system_prompt(mode: str = "rapport") -> str:
+    """Build a mode-specific system prompt.
 
-    return "\n\n".join(
-        [
-            "You are WingmanAI, a real-time networking copilot delivered over SMS.",
-            "You operate in exactly one of three modes per request.",
-            routing,
-            SYSTEM_INITIAL,
-            SYSTEM_DRILL_IN,
-            SYSTEM_RAPPORT,
-            "Few-shot examples for RAPPORT (study these, then write yours):\n"
-            + RAPPORT_FEW_SHOT,
-            "Output ONLY the final SMS text — no JSON, no preamble, no commentary "
-            "about which mode you chose.",
-        ]
-    )
+    Single-mode prompts cut input tokens ~2/3 vs the composite, which matters
+    for free-tier flash-lite latency. Each mode is self-contained — the
+    deterministic router (`_route`) has already chosen the mode by the time
+    we hit the LLM, so we don't need the LLM to also do routing.
+    """
+    if mode == "drill_in":
+        return SYSTEM_DRILL_IN
+    if mode == "rapport":
+        return (
+            SYSTEM_RAPPORT
+            + "\n\nFew-shot examples (study these, then write yours):\n"
+            + RAPPORT_FEW_SHOT
+            + "\nOutput ONLY the final SMS text — no JSON, no preamble."
+        )
+    return SYSTEM_INITIAL
 
 
 def _build_user_payload(

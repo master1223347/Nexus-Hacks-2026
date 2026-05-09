@@ -28,8 +28,11 @@ from typing import Any
 logger = logging.getLogger("wingman.llm.client")
 
 # Per-mode default models. app.llm picks the right one per request.
+# NOTE: rapport defaulted to flash-lite (high free-tier quota = 1000/day).
+# Set WINGMAN_RAPPORT_MODEL=gemini-2.5-flash to escalate when quota allows.
+# Set WINGMAN_RAPPORT_MODEL=gemini-2.5-pro only if eval drops below 9/10.
 MODEL_RANK = os.environ.get("WINGMAN_RANK_MODEL", "gemini-2.5-flash-lite")
-MODEL_RAPPORT = os.environ.get("WINGMAN_RAPPORT_MODEL", "gemini-2.5-flash")
+MODEL_RAPPORT = os.environ.get("WINGMAN_RAPPORT_MODEL", "gemini-2.5-flash-lite")
 
 # Pane 1 budget is 1.5s — flash-lite is well under 1s in practice; flash is
 # ~1-2s. We rely on the SDK's internal connection timeout.
