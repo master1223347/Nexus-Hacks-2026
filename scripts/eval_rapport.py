@@ -105,14 +105,23 @@ def evaluate(attendees: list[dict], goal: str, verbose: bool) -> tuple[int, int]
     n_pass = 0
     n_total = 0
 
+    # Aggregate quote source: rapport correctness is "the reply verbatim-quotes
+    # SOME candidate's recent_post," not "specifically the candidate at position 0."
+    # The renderer/LLM is free to pick the candidate with the strongest signal.
+    all_posts: list[str] = []
+    for c in attendees:
+        for p in c.get("recent_posts") or []:
+            if p:
+                all_posts.append(p)
+
     for cand in attendees:
-        name = cand.get("name", "?")
-        recent_posts = list(cand.get("recent_posts") or [])
+        target_name = cand.get("name", "?")
 
         for query in RAPPORT_QUERIES:
             n_total += 1
 
-            # Put the target candidate first so the H1 renderer picks them.
+            # Put the target candidate first so deterministic renderers see
+            # them; LLM mode is free to pick anyone with strong signal.
             shuffled = [cand] + [c for c in attendees if c is not cand]
 
             reply = rank_and_riff(
@@ -133,18 +142,20 @@ def evaluate(attendees: list[dict], goal: str, verbose: bool) -> tuple[int, int]
             filler = _filler_present(reply)
             if filler:
                 failures.append(f"filler phrase: {filler!r}")
-            if not _verbatim_quote_present(reply, recent_posts):
-                failures.append("no >=15-char verbatim quote from recent_posts")
+            if not _verbatim_quote_present(reply, all_posts):
+                failures.append(
+                    "no >=15-char verbatim quote from any candidate's recent_posts"
+                )
 
             if failures:
-                print(f"FAIL {name} :: query={query!r}")
+                print(f"FAIL target={target_name} :: query={query!r}")
                 print(f"  reply: {reply!r}")
                 for f in failures:
                     print(f"   - {f}")
             else:
                 n_pass += 1
                 if verbose:
-                    print(f"PASS {name} :: query={query!r}")
+                    print(f"PASS target={target_name} :: query={query!r}")
 
     return (n_pass, n_total)
 

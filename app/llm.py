@@ -489,12 +489,87 @@ def _h1_drill_in(message: str, candidates: list[dict[str, Any]]) -> str:
     return _truncate(body, MAX_DRILL_CHARS)
 
 
-def _h1_rapport(goal: str, candidates: list[dict[str, Any]]) -> str:
-    pick: dict[str, Any] | None = None
+_PERSONAL_SIGNAL = (
+    "boba",
+    "matcha",
+    "coffee",
+    "concert",
+    "music",
+    "weekend",
+    "saturday",
+    "sunday",
+    "evening",
+    "tonight",
+    "ergodox",
+    "keyboard",
+    "sourdough",
+    "hike",
+    "hiking",
+    "running",
+    "soccer",
+    "drank",
+    "café",
+    "cafe",
+    "stonemill",
+    "tea",
+    "ramen",
+    "dinner",
+    "lunch",
+)
+
+
+def _rapport_score(cand: dict[str, Any]) -> tuple[int, int]:
+    """Higher = more "fun to grab a drink with" signal.
+
+    Returns (personal_signal_hits, post_count). The first wins ties; the
+    second is the tiebreaker (more posts = more material).
+    """
+    posts = list(cand.get("recent_posts") or [])
+    if not posts:
+        return (0, 0)
+    blob = " ".join(p for p in posts if p).lower()
+    interests_blob = " ".join(str(x) for x in (cand.get("interests") or [])).lower()
+    haystack = f"{blob} {interests_blob}"
+    hits = sum(1 for kw in _PERSONAL_SIGNAL if kw in haystack)
+    return (hits, len(posts))
+
+
+def _pick_rapport_candidate(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Pick the candidate with the strongest personal/casual signal.
+
+    Falls back to "first with recent_posts" so we always return something
+    when no candidate has personal signal — better a plain quote than nothing.
+    """
+    best: dict[str, Any] | None = None
+    best_score = (-1, -1)
     for cand in candidates:
-        if cand.get("recent_posts"):
-            pick = cand
-            break
+        if not cand.get("recent_posts"):
+            continue
+        score = _rapport_score(cand)
+        if score > best_score:
+            best_score = score
+            best = cand
+    return best
+
+
+def _pick_rapport_post(posts: list[str]) -> str:
+    """Pick the recent_post that's most personal — concrete activity beats
+    work hot-takes, even when both are quotable."""
+    best = posts[0] if posts else ""
+    best_hits = -1
+    for post in posts:
+        text = (post or "").lower()
+        hits = sum(1 for kw in _PERSONAL_SIGNAL if kw in text)
+        if hits > best_hits:
+            best_hits = hits
+            best = post
+    return best or ""
+
+
+def _h1_rapport(goal: str, candidates: list[dict[str, Any]]) -> str:
+    pick = _pick_rapport_candidate(candidates)
 
     if pick is None:
         return _truncate(_DEMO_RAPPORT_PRIYA, MAX_RAPPORT_CHARS)
@@ -506,7 +581,7 @@ def _h1_rapport(goal: str, candidates: list[dict[str, Any]]) -> str:
     )
     name = full_name if others_share_first > 1 else first
     posts = list(pick.get("recent_posts") or [])
-    quote = posts[0] if posts else ""
+    quote = _pick_rapport_post(posts)
     quote = re.sub(r"\s+", " ", quote).strip().strip("\"'")
     words = quote.split()
     if len(words) > 12:
