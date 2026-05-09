@@ -212,9 +212,80 @@ def chat_structured(
         return None
 
 
+def warm(
+    *,
+    model: str | None = None,
+    timeout_s: float = 5.0,
+) -> bool:
+    """Cold-start the Gemini connection so the first real user call is warm.
+
+    Pane 1 calls this from FastAPI's startup hook (app/main.py). Cold
+    Gemini latency was observed at 1.5-5.7s on the very first call;
+    pre-warming pulls that hit out of the user-facing request path.
+
+    Cost: one prompt token + one output token (~free).
+    Behavior: never raises. Returns True on a clean ping, False otherwise.
+    Safe to call multiple times — idempotent.
+
+    Suggested wiring in app/main.py (do this from Pane 1, not here):
+
+        from app.llm import warm_llm
+
+        @app.on_event("startup")
+        async def _startup_warm() -> None:
+            # Sync call is fine — startup is not in the request path.
+            warm_llm()
+
+        # OR, with FastAPI lifespan:
+        # @asynccontextmanager
+        # async def lifespan(app):
+        #     warm_llm()
+        #     yield
+    """
+    if not _api_key():
+        logger.info("gemini.warm.skipped reason=no_api_key")
+        return False
+
+    client = _client()
+    if client is None:
+        logger.info("gemini.warm.skipped reason=client_unavailable")
+        return False
+
+    try:
+        from google.genai import types
+    except ImportError:
+        logger.warning("gemini.warm.skipped reason=types_unavailable")
+        return False
+
+    target_model = model or MODEL_RANK
+    config = types.GenerateContentConfig(max_output_tokens=1, temperature=0.0)
+
+    started = time.perf_counter()
+    try:
+        client.models.generate_content(
+            model=target_model,
+            contents="ping",
+            config=config,
+        )
+    except Exception as exc:  # noqa: BLE001 — startup must never fail
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.warning(
+            "gemini.warm.failed model=%s ms=%d err=%s",
+            target_model,
+            elapsed_ms,
+            exc,
+        )
+        return False
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info("gemini.warmed_up model=%s ms=%d", target_model, elapsed_ms)
+    return True
+
+
 __all__ = [
     "chat",
     "chat_structured",
+    "warm",
     "MODEL_RANK",
     "MODEL_RAPPORT",
     "DEFAULT_TIMEOUT_S",

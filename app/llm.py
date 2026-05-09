@@ -773,4 +773,14 @@ def _match_candidate(
     return None
 
 
-__all__ = ["extract_goal", "rank_and_riff"]
+def warm_llm() -> bool:
+    """Pre-warm the Gemini connection. Call from FastAPI startup hook.
+
+    Wraps app.llm_client.warm(). Returns True on a clean ping. Never raises
+    — startup must not fail because the model is briefly unreachable.
+    See app/llm_client.py::warm for wiring example in app/main.py.
+    """
+    return llm_client.warm()
+
+
+__all__ = ["extract_goal", "rank_and_riff", "warm_llm"]
