@@ -22,9 +22,24 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from app import llm as _llm_module
-from app import memory as _memory_module
-from app import retrieval as _retrieval_module
+def _safe_import(name: str) -> Any:
+    """Import a sibling module if present, else return None.
+
+    During parallel hackathon dev the downstream modules (llm, memory,
+    retrieval) may not be on disk on every branch. _resolve() below handles
+    None modules transparently.
+    """
+    try:
+        from importlib import import_module
+
+        return import_module(name)
+    except ImportError:
+        return None
+
+
+_llm_module: Any = _safe_import("app.llm")
+_memory_module: Any = _safe_import("app.memory")
+_retrieval_module: Any = _safe_import("app.retrieval")
 
 logger = logging.getLogger("wingman.orchestrator")
 
@@ -81,6 +96,8 @@ def _fallback_rank_and_riff(
 
 def _resolve(module: Any, name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
     """Return the module's attribute if callable, else fall back."""
+    if module is None:
+        return fallback
     fn = getattr(module, name, None)
     return fn if callable(fn) else fallback
 

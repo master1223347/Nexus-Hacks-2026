@@ -11,17 +11,18 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Form, Response
+from fastapi import APIRouter, Depends, Form, Response
 
 from app.orchestrator import FALLBACK_REPLY, handle_sms_turn
 from app.twilio_client import build_twiml
+from app.twilio_security import validate_twilio_signature
 
 logger = logging.getLogger("wingman.sms")
 
 router = APIRouter()
 
 
-@router.post("/sms")
+@router.post("/sms", dependencies=[Depends(validate_twilio_signature)])
 async def sms_webhook(
     From: str = Form(...),
     Body: str = Form(""),
