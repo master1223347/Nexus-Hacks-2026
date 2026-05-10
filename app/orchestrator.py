@@ -19,7 +19,6 @@ import asyncio
 import hashlib
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -262,7 +261,7 @@ async def handle_sms_turn(from_phone: str, body: str) -> SmsTurnResult:
         if ok and isinstance(result, list):
             candidates = result
 
-    # LLM — 1.5s budget. On miss, hand back the fallback reply.
+    # LLM — bounded budget. On miss, hand back the fallback reply.
     reply: str
     result, ok = await _run_with_timeout(
         rank_and_riff,

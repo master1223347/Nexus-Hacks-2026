@@ -347,7 +347,7 @@ def _build_user_payload(
     parts.append(f"mode_hint: {mode.upper()}")
 
     parts.append("\nCANDIDATES (top-{}):".format(len(candidates)))
-    for i, cand in enumerate(candidates[:MAX_CANDIDATES_FOR_LLM], start=1):
+    for i, cand in enumerate(candidates, start=1):
         name = (cand.get("name") or "Unknown").strip()
         headline = (cand.get("headline") or "").strip()
         company = (cand.get("company") or "").strip()
