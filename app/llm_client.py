@@ -69,7 +69,7 @@ def chat(
             timeout_s=timeout_s,
         )
     if gemini_key:
-        gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
+        gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
         return _chat_gemini(
             messages=messages,
             api_key=gemini_key,
