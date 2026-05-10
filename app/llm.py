@@ -18,21 +18,14 @@ Strategy:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from pathlib import Path
 from typing import Any
-
-from pydantic import BaseModel
 
 from app import llm_client
 from app.prompts.rank import (
     FALLBACK_REPLY,
-    LIMITED_MATCHES_PREAMBLE,
     NEED_MORE_DATA,
-    NO_MATCH_FOOTER,
-    NO_MATCH_PREAMBLE,
     SYSTEM_DRILL_IN,
     SYSTEM_INITIAL,
 )
@@ -40,42 +33,13 @@ from app.prompts.rapport import RAPPORT_FEW_SHOT, SYSTEM_RAPPORT
 
 logger = logging.getLogger("wingman.llm")
 
-# Bio one-liner cap. The system prompt asks the model to keep one_liners
-# under 100 chars; we trim defensively at the same boundary, on a word edge,
-# to keep "Cosmas Mandikonza — ..., an" truncations off the SMS.
-ONE_LINER_CAP = 100
-
-# Detects "Open with: \"<some text>\"" anywhere in the reply, with at least
-# 5 chars inside the quotes. Used to enforce the literal-opener rule for
-# rapport + drill-in replies.
-_OPENER_RE = re.compile(r'Open with:\s*"([^"\n]{5,})"', re.IGNORECASE)
-
-
-class _RankItem(BaseModel):
-    name: str
-    one_liner: str
-    quoted_post: str | None = None
-
-
-class _RankResponse(BaseModel):
-    top_3: list[_RankItem]
-    under_filled: bool = False
-    no_match: bool = False
-
 # SMS budgets (verified by scripts/eval_rapport.py).
-# MAX_LIST_CHARS bumped to 480 to fit 3 × 100-char bios + the optional
-# "Limited goal-aligned matches…" preamble. Twilio segment-merging handles
-# 3-segment messages cleanly.
-MAX_LIST_CHARS = 480
+MAX_LIST_CHARS = 320
 MAX_DRILL_CHARS = 480
 MAX_RAPPORT_CHARS = 320
 
 # Cap how many candidates we hand the LLM (token cost). Pane 2 returns up to 10.
 MAX_CANDIDATES_FOR_LLM = 5
-# Initial-mode wider window: the user can filter on any field, and the
-# matching attendee may rank low under Pane 2's goal-keyword retrieval.
-# 15 candidates × ~6 fields each ≈ 12KB of context — fine for flash-lite.
-MAX_INITIAL_CANDIDATES = 15
 # Cap how many history entries we hand the LLM.
 MAX_HISTORY_FOR_LLM = 6
 
@@ -143,145 +107,6 @@ _DRILL_VERBS = (
     "what about",
 )
 
-# meta_question heuristics — questions about the event, the bot, or anything
-# that ISN'T "find me people / tell me about someone / who's fun." We catch
-# the common phrasings cheap; ambiguous messages fall through to the LLM
-# classifier (`_classify_intent_llm`).
-_META_REGEXES = (
-    re.compile(r"\bwhat(?:'s|s|\s+is)?\s+the\s+(event|venue|address|location|wifi|password)\b", re.IGNORECASE),
-    re.compile(r"\bwhere(?:'s|s|\s+is)?\s+(this|the\s+event|it|here)\b", re.IGNORECASE),
-    re.compile(r"\bwhat\s+time\b", re.IGNORECASE),
-    re.compile(r"\bwhen\s+(does|is|will|do)\b", re.IGNORECASE),
-    re.compile(r"\bhow\s+(do|does|can)\s+(i|this|you|it)\b", re.IGNORECASE),
-    re.compile(r"\bwhat\s+(can|do)\s+you\s+do\b", re.IGNORECASE),
-    re.compile(r"\bwho\s+are\s+you\b", re.IGNORECASE),
-    re.compile(r"\bwhat\s+(is|are)\s+(wingman|this|you)\b", re.IGNORECASE),
-    re.compile(r"\bhelp\b", re.IGNORECASE),
-)
-
-# Phrases that strongly suggest an attendee-search intent (initial/drill/rapport).
-# If any of these appear we skip meta classification entirely — "find me a med-tech
-# investor at this event" should NOT route to meta just because it mentions "event".
-_PEOPLE_INTENT_HINTS = (
-    "find me",
-    "find a",
-    "find someone",
-    "any vc",
-    "any vcs",
-    "anyone",
-    "tell me about",
-    "who is ",
-    "who should",
-    "show me",
-    "people who",
-    "looking for",
-    "want to meet",
-)
-
-# inappropriate_query patterns. Whole-word matches; the wider phrase patterns
-# (e.g. 'hot girls') are precise enough to leave 'hot takes' / 'hot AI' alone.
-_INAPPROPRIATE_PATTERNS = (
-    re.compile(r"\bbaddies?\b", re.IGNORECASE),
-    re.compile(r"\bcuties?\b", re.IGNORECASE),
-    re.compile(r"\bbabes?\b", re.IGNORECASE),
-    re.compile(r"\bhotties?\b", re.IGNORECASE),
-    re.compile(
-        r"\bhot\s+(?:girls?|guys?|men|women|chicks?|babes?|people|ones?)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\brank(?:ed|ing)?\s+by\s+(?:looks?|attractiveness|appearance|hotness)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:cute|attractive|good[- ]?looking)\s+(?:girls?|guys?|men|women|people)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bsingle\s+(?:girls?|guys?|women|men|chicks?|dudes?)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\bhook[- ]?up\b", re.IGNORECASE),
-    re.compile(r"\btinder\b", re.IGNORECASE),
-)
-
-INAPPROPRIATE_REPLY = (
-    "i don't filter on appearance — but tell me what you actually want from "
-    "the room and i'll find them. e.g. 'i'm raising a seed' or 'i need a "
-    "technical cofounder'."
-)
-
-SMALL_TALK_REPLY = (
-    "hey! tell me what you're hunting and i'll point you somewhere — try "
-    "'find me ML engineers', 'anyone from CMU', or 'anyone fun to grab a "
-    "drink with'."
-)
-
-# Greetings + empty-intent acks. Short, low-content messages that should
-# get an onboarding reply instead of being treated as a search goal.
-_SMALL_TALK_PATTERNS = (
-    re.compile(
-        r"^\s*(hi|hello|hey|yo|sup|wassup|wsp|howdy|hiya|aloha|"
-        r"hi\s+\w+|hello\s+\w+|hey\s+\w+)[\s!?.,]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(what'?s\s+up|good\s+(morning|afternoon|evening|night))"
-        r"[\s!?.,]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(thanks|thank\s+you|ty|tysm|cool|nice|got\s+it|"
-        r"ok|okay|k|kk|lol|haha|lmao|nvm|never\s*mind)[\s!?.,]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(r"^\s*(help|what\s+do\s+i\s+do|how\s+do\s+i\s+use\s+this)[\s!?.,]*$", re.IGNORECASE),
-)
-
-# Tiebreaker for rapport: when one of these terms appears in the message,
-# the user has a concrete filter even if the message is socially framed
-# ("anyone fun who works at meta" -> initial, not rapport).
-_FILTER_TERMS = (
-    # tech / infra
-    "rag", "ml", "llm", "ai", "gpu", "cuda", "kubernetes", "postgres",
-    "kafka", "react", "rust", "golang", "python", "swift", "ios", "android",
-    "ai infra", "agentic", "embedding", "vector",
-    # credentials / roles
-    "phd", "ph.d", "ph.d.", "mba", "master", "masters", "intern",
-    "founder", "co-founder", "cofounder", "ceo", "cto", "vp", "director",
-    "engineer", "designer", "researcher", "scientist", "investor",
-    "vc", "vcs",
-    # categories
-    "b2b", "b2c", "saas", "fintech", "healthtech", "biotech", "edtech",
-    "med-tech", "medtech", "yc", "y combinator", "y-combinator",
-    # universities (commonly typed lowercase by SMS users)
-    "cmu", "mit", "stanford", "berkeley", "ucb", "ucla", "harvard",
-    "princeton", "cornell", "columbia", "ucsd", "ucsf", "purdue",
-    "carnegie mellon", "ucr",
-    # common employers
-    "meta", "google", "openai", "anthropic", "stripe", "amazon", "apple",
-    "microsoft", "nvidia", "deepmind", "linkedin", "uber", "airbnb",
-    "tesla", "spacex", "palantir", "oracle", "salesforce", "adobe",
-    "instacart", "doordash", "perplexity", "scale ai",
-)
-_FILTER_TERMS_RE = re.compile(
-    r"\b(" + "|".join(re.escape(t) for t in _FILTER_TERMS) + r")\b",
-    re.IGNORECASE,
-)
-_ACRONYM_RE = re.compile(r"\b[A-Z]{2,}\b")
-
-
-def _has_concrete_filter(message: str) -> bool:
-    """True iff the message contains a concrete filter term (tech / role /
-    employer / school / acronym). Used to break the rapport tie."""
-    if not message:
-        return False
-    if _FILTER_TERMS_RE.search(message):
-        return True
-    if _ACRONYM_RE.search(message):
-        return True
-    return False
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -328,66 +153,25 @@ def rank_and_riff(
         recent_history = list(history or [])[-MAX_HISTORY_FOR_LLM:]
         mode = _route(message=message or "", candidates=all_cands)
 
-        # Defensive: if the stored goal is itself a meta-question (poisoned
-        # by a previous turn before Pane 1's guard was wired), ignore it
-        # so it doesn't skew the rank.
-        effective_goal = goal or ""
-        if effective_goal and _is_meta_question(message=effective_goal):
-            logger.info("rank_and_riff.goal_poisoned cleared=%r", effective_goal)
-            effective_goal = ""
+        # Drill-in needs the full list so users can name anyone, not just the
+        # top 5. Other modes operate on the LLM-budget slice.
+        candidates_for_pick = (
+            all_cands if mode == "drill_in" else all_cands[:MAX_CANDIDATES_FOR_LLM]
+        )
 
         logger.info(
             "llm_route mode=%s goal_set=%s n_candidates=%d hist=%d",
             mode,
-            bool(effective_goal),
+            bool(goal),
             len(all_cands),
             len(recent_history),
         )
-
-        # Inappropriate queries: hardcoded redirect, ZERO LLM cost. Skip
-        # retrieval entirely. The candidates list is intentionally not
-        # forwarded to any model.
-        if mode == "inappropriate_query":
-            return INAPPROPRIATE_REPLY
-
-        # Small talk (greetings, acks, "help"): hardcoded onboarding reply,
-        # zero LLM cost, no retrieval, no goal stored.
-        if mode == "small_talk":
-            return SMALL_TALK_REPLY
-
-        # Meta questions bypass attendee ranking entirely — answer from the
-        # event_meta context, never poison the user's goal.
-        if mode == "meta_question":
-            return _handle_meta_question(
-                message=message or "",
-                history=recent_history,
-            )
-
-        # Per-mode candidate window:
-        #   drill_in -> JUST the named target. Cross-pollination across
-        #               attendee posts hallucinates badly otherwise.
-        #               Falls back to top-5 if we couldn't match a name.
-        #   rapport  -> wider window — rapport pick should not be constrained
-        #               to the goal-ranked top 5; matcha/boba people may rank
-        #               low for the user's stated goal but high for rapport.
-        #   initial  -> wider still (≤15). The user can filter on any field
-        #               (CMU / Meta / RAG / PhD) and the matching attendee
-        #               may not be in Pane 2's goal-ranked top 5.
-        if mode == "drill_in":
-            target = _match_candidate(message=message or "", candidates=all_cands)
-            candidates_for_pick = (
-                [target] if target is not None else all_cands[:MAX_CANDIDATES_FOR_LLM]
-            )
-        elif mode == "rapport":
-            candidates_for_pick = all_cands[:10]
-        else:
-            candidates_for_pick = all_cands[:MAX_INITIAL_CANDIDATES]
 
         # Try the LLM. _try_llm() returns None when the call is unavailable
         # or the output fails a hard quality check.
         llm_reply = _try_llm(
             mode=mode,
-            goal=effective_goal,
+            goal=goal or "",
             candidates=candidates_for_pick,
             message=message or "",
             history=recent_history,
@@ -397,10 +181,7 @@ def rank_and_riff(
 
         # H1 deterministic fallback path.
         return _h1_render(
-            mode=mode,
-            goal=effective_goal,
-            candidates=all_cands,
-            message=message or "",
+            mode=mode, goal=goal or "", candidates=all_cands, message=message or ""
         )
     except Exception:  # pragma: no cover — defensive; demo must never 500
         logger.exception("rank_and_riff failed; returning FALLBACK_REPLY")
@@ -413,116 +194,23 @@ def rank_and_riff(
 
 
 def _route(message: str, candidates: list[dict[str, Any]]) -> str:
-    """Return one of:
-      'initial' | 'drill_in' | 'rapport' | 'meta_question' | 'inappropriate_query'.
+    """Return one of: 'initial' | 'drill_in' | 'rapport'.
 
-    Order:
-      inappropriate_query — wins over EVERYTHING. We never honor the
-                            inappropriate framing even if it's wrapped in
-                            "tell me about" or "anyone fun".
-      drill_in   — explicit "tell me about <name>" or a candidate-name match.
-      rapport    — explicit fun/casual ask, BUT only when there's no concrete
-                   filter (proper noun, technical term, role, school).
-                   "anyone fun who works at meta" -> initial, not rapport.
-      meta       — questions about the event, bot, venue, or how-to.
-      initial    — default attendee-ranking ask.
+    Order matters: drill-in beats rapport beats initial because a user can
+    legitimately say "tell me about marcus, who's fun?" and we want the
+    direct-name signal to win.
     """
-    msg = message or ""
-    lowered = msg.lower()
-
-    if _is_inappropriate(msg):
-        return "inappropriate_query"
-
-    if _is_small_talk(msg):
-        return "small_talk"
+    lowered = message.lower()
 
     if any(verb in lowered for verb in _DRILL_VERBS):
         return "drill_in"
-    if _match_candidate(message=msg, candidates=candidates) is not None:
+    if _match_candidate(message=message, candidates=candidates) is not None:
         return "drill_in"
 
-    has_rapport_kw = any(
-        re.search(rf"\b{re.escape(kw)}\b", lowered) for kw in _RAPPORT_KEYWORDS
-    )
-    if has_rapport_kw and not _has_concrete_filter(msg):
+    if any(re.search(rf"\b{re.escape(kw)}\b", lowered) for kw in _RAPPORT_KEYWORDS):
         return "rapport"
 
-    if _is_meta_question(message=msg):
-        return "meta_question"
-
     return "initial"
-
-
-def _is_inappropriate(message: str) -> bool:
-    """True iff the message is filtering people on looks / dating frames."""
-    if not message:
-        return False
-    return any(rgx.search(message) for rgx in _INAPPROPRIATE_PATTERNS)
-
-
-def _is_small_talk(message: str) -> bool:
-    """True iff the message is a greeting, ack, or low-content noise.
-
-    Short messages that match a greeting/ack regex skip retrieval entirely
-    and get a hardcoded onboarding reply.
-    """
-    if not message or not message.strip():
-        return True
-    return any(rgx.search(message) for rgx in _SMALL_TALK_PATTERNS)
-
-
-def _is_meta_question(message: str) -> bool:
-    """True iff the message is asking about the event/bot/venue, not people.
-
-    Cheap heuristic: explicit people-intent hints disqualify; otherwise any
-    of the meta regexes wins. Pane 1 calls `classify_intent()` (which wraps
-    this) before set_goal() to avoid the "what time is the event" goal-
-    poisoning bug.
-    """
-    if not message:
-        return False
-    lowered = message.lower()
-    if any(hint in lowered for hint in _PEOPLE_INTENT_HINTS):
-        return False
-    return any(rgx.search(message) for rgx in _META_REGEXES)
-
-
-def classify_intent(
-    message: str, candidates: list[dict[str, Any]] | None = None
-) -> str:
-    """Public intent classifier — same modes as `_route`.
-
-    Pane 1 should call this BEFORE persisting a goal. When the result is
-    'meta_question', skip set_goal() so the caller's prior real goal isn't
-    overwritten by something like "what time is the event".
-
-    Example wiring in app/orchestrator.py:
-
-        intent = classify_intent(body)
-        if not goal and body and intent != 'meta_question':
-            goal = extract_goal(body)
-            if goal:
-                set_goal(from_phone, goal)
-    """
-    return _route(message=message or "", candidates=list(candidates or []))
-
-
-def should_persist_goal(message: str) -> bool:
-    """One-line check Pane 1 can wrap around set_goal() in the orchestrator.
-
-    Returns False when the message is a meta_question or inappropriate_query
-    (so the existing real goal stays put). Returns True for any genuine
-    people-search intent.
-
-    Suggested wiring in app/orchestrator.py:
-
-        if not goal and body and should_persist_goal(body):
-            goal = extract_goal(body)
-            if goal:
-                set_goal(from_phone, goal)
-    """
-    intent = classify_intent(message)
-    return intent not in ("meta_question", "inappropriate_query", "small_talk")
 
 
 # ---------------------------------------------------------------------------
@@ -537,29 +225,11 @@ def _try_llm(
     message: str,
     history: list[dict[str, str]],
 ) -> str | None:
-    """Single-call LLM dispatch. Returns SMS text or None on any failure.
-
-    Model selection (per user instruction):
-      initial / drill_in -> gemini-2.5-flash-lite
-      rapport            -> gemini-2.5-flash  (escalate to gemini-2.5-pro
-                                               only if eval drops below 9/10)
-    """
-    if not os.environ.get("GEMINI_API_KEY", "").strip():
-        return None
+    """Single-call LLM dispatch. Returns SMS text or None on any failure."""
     if not llm_client.is_configured():
         return None
 
-    # Initial mode: structured JSON via flash-lite, formatted into SMS.
-    if mode == "initial":
-        return _try_llm_initial(
-            goal=goal,
-            candidates=candidates,
-            message=message,
-            history=history,
-        )
-
-    # Drill-in & rapport: free-text generation.
-    system_prompt = _build_system_prompt(mode=mode)
+    system_prompt = _build_system_prompt()
     user_payload = _build_user_payload(
         mode=mode,
         goal=goal,
@@ -573,27 +243,11 @@ def _try_llm(
         {"role": "user", "content": user_payload},
     ]
 
-    # Rapport: lower temp + tight token budget. Output is ≤320 chars (~80
-    # tokens); 200 leaves slack but cuts wall-clock vs the old 400.
-    # Drill-in: ≤480 chars (~120 tokens); cap at 250 for the same reason.
-    if mode == "rapport":
-        model = llm_client.MODEL_RAPPORT
-        temperature = 0.4
-        max_tokens = 200
-    else:
-        # drill_in: bumped 250 -> 350 so the model has room to finish
-        # the bio AND emit the literal `Open with: "..."` opener line
-        # before max_output_tokens cuts it off mid-bio.
-        model = llm_client.MODEL_RANK
-        temperature = 0.5
-        max_tokens = 350
+    # Rapport demands the most discipline (verbatim quote). Drop temp slightly
+    # to bias the model toward copying from recent_posts rather than improvising.
+    temperature = 0.4 if mode == "rapport" else 0.5
 
-    reply = llm_client.chat(
-        messages=messages,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    reply = llm_client.chat(messages=messages, temperature=temperature, max_tokens=400)
     if reply is None:
         return None
 
@@ -611,292 +265,12 @@ def _try_llm(
 
     # Rapport: enforce the verbatim-quote rule at runtime. If the LLM didn't
     # actually quote a recent_post, the H1 renderer (which always quotes) is
-    # strictly safer.
+    # strictly safer — even if its prose is plainer.
     if mode == "rapport" and not _has_verbatim_quote(reply, candidates):
         logger.info("llm_reply.no_verbatim_quote mode=%s", mode)
         return None
 
-    # Drill-in + rapport: enforce the literal "Open with: \"…\"" opener.
-    # Topic suggestions like "Open with AI tools" don't land — the user
-    # needs a sentence they can speak. We salvage by appending a generic
-    # quoted opener if the LLM forgot, rather than discarding the reply,
-    # because the bio is usually still good.
-    if mode in ("rapport", "drill_in"):
-        cap = MAX_RAPPORT_CHARS if mode == "rapport" else MAX_DRILL_CHARS
-        reply = _ensure_quoted_opener(
-            reply=reply, candidates=candidates, total_cap=cap
-        )
-        # Cut anything the model emitted AFTER the quoted opener — it
-        # tends to add a second bio block that gets clipped mid-word and
-        # looks broken on the SMS. The opener is the contract; what
-        # follows is noise.
-        reply = _truncate_at_opener(reply)
-
     return reply
-
-
-def _truncate_at_opener(reply: str) -> str:
-    """Cut the reply right after the FIRST `Open with: "…"` line."""
-    m = _OPENER_RE.search(reply)
-    if not m:
-        return reply
-    end = m.end()
-    # Allow trailing whitespace/newlines but drop everything after the next
-    # newline that follows the closing quote.
-    trailing = reply[end:]
-    nl = trailing.find("\n")
-    if nl == -1:
-        return reply  # opener is the last line — nothing to trim
-    return reply[: end + nl].rstrip()
-
-
-def _ensure_quoted_opener(
-    reply: str,
-    candidates: list[dict[str, Any]],
-    total_cap: int,
-) -> str:
-    """Return a reply guaranteed to end with `Open with: "…"` and fit in `total_cap`.
-
-    If the LLM already produced a quoted opener (≥5 chars in the quotes),
-    leave it. Otherwise:
-      1. Strip any unquoted opener line ("Open with: AI tools").
-      2. Build a salvaged quoted opener from the most recently quoted
-         snippet in the reply, or the first recent_post we can find.
-      3. Trim the bio first so bio + opener fits inside total_cap —
-         otherwise the outer `_truncate_for_mode` would clip the opener
-         off and we'd ship "..." with no opener at all (the regression
-         this code is here to prevent).
-    """
-    if _OPENER_RE.search(reply):
-        return reply
-
-    logger.info("llm_reply.opener.salvaged")
-
-    # Strip any unquoted "Open with: …" line, plus trailing punctuation /
-    # ellipsis the model may have left.
-    cleaned_bio = re.sub(
-        r"\s*Open with:[^\n]*$", "", reply.rstrip(), flags=re.IGNORECASE
-    ).rstrip(" .…—")
-    if not cleaned_bio:
-        cleaned_bio = "Worth grabbing 5 min"
-
-    quoted = re.search(r'"([^"]{15,})"', reply)
-    raw_hook = quoted.group(1) if quoted else _first_post_snippet(candidates)
-    # Tight hook (~6 words) so the salvaged opener stays conversational.
-    hook = " ".join((raw_hook or "").split()[:6]).rstrip(",.;:")
-
-    if hook:
-        opener = (
-            f'Open with: "Saw your post about {hook} — what got you onto that?"'
-        )
-    else:
-        opener = (
-            'Open with: "What\'s the most interesting thing you\'ve been '
-            'working on this week?"'
-        )
-
-    # Reserve room for the opener (+ ".\n" joiner) inside the cap. Without
-    # this, the outer truncate eats the opener and the user sees "...".
-    join_overhead = 2  # for ".\n"
-    bio_budget = max(40, total_cap - len(opener) - join_overhead)
-    if len(cleaned_bio) > bio_budget:
-        cleaned_bio = _word_boundary_trim(cleaned_bio, bio_budget)
-
-    return f"{cleaned_bio}.\n{opener}"
-
-
-def _first_post_snippet(candidates: list[dict[str, Any]]) -> str:
-    """Pull a short usable snippet from the first candidate with recent_posts."""
-    for cand in candidates:
-        for post in cand.get("recent_posts") or []:
-            post = (post or "").strip()
-            if len(post) >= 20:
-                # Trim to ~10 words for the salvaged opener.
-                words = post.split()[:10]
-                snippet = " ".join(words).rstrip(",.;:")
-                return snippet
-    return ""
-
-
-def _try_llm_initial(
-    goal: str,
-    candidates: list[dict[str, Any]],
-    message: str,
-    history: list[dict[str, str]],
-) -> str | None:
-    """Initial-rank mode: structured JSON output, formatted into SMS.
-
-    Returns the formatted SMS reply, or None on any failure (caller falls
-    back to the H1 deterministic renderer).
-    """
-    user_payload = _build_user_payload(
-        mode="initial",
-        goal=goal,
-        candidates=candidates,
-        message=message,
-        history=history,
-    )
-    messages = [
-        {"role": "system", "content": SYSTEM_INITIAL},
-        {"role": "user", "content": user_payload},
-    ]
-
-    parsed = llm_client.chat_structured(
-        messages=messages,
-        schema=_RankResponse,
-        model=llm_client.MODEL_RANK,
-        temperature=0.3,
-        max_tokens=400,
-    )
-    if parsed is None:
-        return None
-
-    raw_items = (
-        parsed.top_3
-        if hasattr(parsed, "top_3")
-        else (parsed.get("top_3") if isinstance(parsed, dict) else None)
-    )
-    under_filled = bool(_field(parsed, "under_filled", False))
-    no_match = bool(_field(parsed, "no_match", False))
-
-    if not raw_items:
-        return None
-
-    items: list[dict[str, str]] = []
-    for it in raw_items:
-        name = _field(it, "name")
-        one_liner = _field(it, "one_liner")
-        quoted = _field(it, "quoted_post")
-        if not name or not one_liner:
-            continue
-        clean_name = str(name).strip()
-        clean_liner = str(one_liner).strip()
-        # Strip a leading "{name} —" / "{name} -" / "{name}:" the model
-        # sometimes echoes into the one_liner; we render the name ourselves.
-        first_token = clean_name.split()[0] if clean_name else ""
-        for prefix in (clean_name, first_token):
-            if prefix and clean_liner.lower().startswith(prefix.lower()):
-                clean_liner = clean_liner[len(prefix):].lstrip(" —–-:")
-                break
-        items.append(
-            {
-                "name": clean_name,
-                "one_liner": clean_liner,
-                "quoted_post": (str(quoted).strip() if quoted else ""),
-            }
-        )
-
-    if not items:
-        logger.info("llm_initial.empty_after_parse")
-        return None
-
-    # Reject filler-laden one_liners across the whole reply.
-    blob = " ".join(it["one_liner"].lower() for it in items)
-    for phrase in _FILLER:
-        if phrase in blob:
-            logger.info("llm_initial.filler phrase=%r", phrase)
-            return None
-
-    # No-match path: friendly redirect + closest-adjacent + widen offer.
-    if no_match:
-        return _format_no_match(goal=goal, items=items)
-
-    # Standard rank path. The user asked for a casual lowercase voice;
-    # "top picks tonight" beats "Top 3 tonight" for the friend tone.
-    header_lines: list[str] = []
-    if under_filled:
-        header_lines.append(LIMITED_MATCHES_PREAMBLE.rstrip())
-    header_lines.append("top picks tonight:")
-    lines = list(header_lines)
-    for i, it in enumerate(items[:3], start=1):
-        one_liner = _word_boundary_trim(
-            re.sub(r"\s+", " ", it["one_liner"]), ONE_LINER_CAP
-        )
-        lines.append(f"{i}) {it['name']} — {one_liner}")
-
-    body = "\n".join(lines)
-    return _truncate(body, MAX_LIST_CHARS)
-
-
-def _field(obj: Any, key: str, default: Any = None) -> Any:
-    """Read a field from a Pydantic model OR a dict (the SDK returns either)."""
-    if obj is None:
-        return default
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
-
-
-def _format_no_match(goal: str, items: list[dict[str, str]]) -> str:
-    """Format the honest-miss reply: preamble + 1-3 closest + widen offer."""
-    quoted_goal = goal.strip() or "that"
-    lines = [NO_MATCH_PREAMBLE.format(goal=f'"{quoted_goal}"').rstrip()]
-    for i, it in enumerate(items[:3], start=1):
-        one_liner = _word_boundary_trim(
-            re.sub(r"\s+", " ", it["one_liner"]), ONE_LINER_CAP
-        )
-        lines.append(f"{i}) {it['name']} — {one_liner}")
-    body = "\n".join(lines) + NO_MATCH_FOOTER
-    return _truncate(body, MAX_LIST_CHARS)
-
-
-def _word_boundary_trim(text: str, limit: int) -> str:
-    """Trim `text` to <=limit chars on a word/sentence boundary.
-
-    Never returns mid-word ("Cosmas Mandikonza — ..., an") and never returns
-    text ending on filler joiners ("and", "or", "but"). Falls back to a
-    last-space cut if no good boundary exists.
-    """
-    text = (text or "").strip()
-    if len(text) <= limit:
-        # Still strip trailing junk in case the model itself overshot
-        # complete-sentence discipline.
-        return _strip_trailing_joiners(text)
-
-    window = text[:limit]
-    # Prefer a sentence-ish boundary first.
-    for sep in (". ", "; ", " — ", " - "):
-        idx = window.rfind(sep)
-        if idx >= int(limit * 0.5):
-            return _strip_trailing_joiners(text[:idx].rstrip())
-
-    # Otherwise the last word boundary.
-    space = window.rfind(" ")
-    if space >= int(limit * 0.5):
-        return _strip_trailing_joiners(text[:space].rstrip())
-
-    return _strip_trailing_joiners(window.rstrip())
-
-
-_TRAILING_JOINERS = {
-    "and",
-    "or",
-    "but",
-    "an",
-    "a",
-    "the",
-    "of",
-    "to",
-    "in",
-    "on",
-    "at",
-    "for",
-    "with",
-}
-
-
-def _strip_trailing_joiners(text: str) -> str:
-    """Drop trailing connector words that signal an abrupt cut."""
-    cleaned = text.rstrip(" ,;:.…—-")
-    while True:
-        parts = cleaned.rsplit(" ", 1)
-        if len(parts) < 2:
-            break
-        if parts[-1].lower() in _TRAILING_JOINERS:
-            cleaned = parts[0].rstrip(" ,;:.…—-")
-            continue
-        break
-    return cleaned
 
 
 def _has_verbatim_quote(reply: str, candidates: list[dict[str, Any]]) -> bool:
@@ -915,24 +289,45 @@ def _has_verbatim_quote(reply: str, candidates: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _build_system_prompt(mode: str = "rapport") -> str:
-    """Build a mode-specific system prompt.
+def _build_system_prompt() -> str:
+    """Compose the three per-mode rule blocks plus a routing block."""
+    routing = (
+        "Routing:\n"
+        "- If the user names a specific attendee from CANDIDATES, or starts "
+        "with phrases like 'tell me about <name>' / 'who is <name>' / 'what "
+        "about <name>' -> mode = DRILL_IN.\n"
+        "- Else if the user asks for someone fun / casual / interesting / "
+        "chill / cool / good for coffee or drinks -> mode = RAPPORT.\n"
+        "- Otherwise -> mode = INITIAL_RANK.\n"
+        "The user message includes a 'mode_hint' line — trust it unless the "
+        "message clearly contradicts it.\n"
+    )
+    style = (
+        "Voice and style:\n"
+        "- Sound like a sharp, human friend over text.\n"
+        "- Use light slang sparingly (0-2 casual terms).\n"
+        "- You may use one playful jab max (light roast energy), but keep it "
+        "respectful and non-abusive.\n"
+        "- Never insult identity, appearance, health, or protected traits.\n"
+        "- Keep replies in sentence/paragraph format. No bullet points or "
+        "numbered lists.\n"
+    )
 
-    Single-mode prompts cut input tokens ~2/3 vs the composite, which matters
-    for free-tier flash-lite latency. Each mode is self-contained — the
-    deterministic router (`_route`) has already chosen the mode by the time
-    we hit the LLM, so we don't need the LLM to also do routing.
-    """
-    if mode == "drill_in":
-        return SYSTEM_DRILL_IN
-    if mode == "rapport":
-        return (
-            SYSTEM_RAPPORT
-            + "\n\nFew-shot examples (study these, then write yours):\n"
-            + RAPPORT_FEW_SHOT
-            + "\nOutput ONLY the final SMS text — no JSON, no preamble."
-        )
-    return SYSTEM_INITIAL
+    return "\n\n".join(
+        [
+            "You are WingmanAI, a real-time networking copilot delivered over SMS.",
+            "You operate in exactly one of three modes per request.",
+            routing,
+            style,
+            SYSTEM_INITIAL,
+            SYSTEM_DRILL_IN,
+            SYSTEM_RAPPORT,
+            "Few-shot examples for RAPPORT (study these, then write yours):\n"
+            + RAPPORT_FEW_SHOT,
+            "Output ONLY the final SMS text — no JSON, no preamble, no commentary "
+            "about which mode you chose.",
+        ]
+    )
 
 
 def _build_user_payload(
@@ -951,21 +346,8 @@ def _build_user_payload(
     parts.append(f"goal: {goal or '(unknown)'}")
     parts.append(f"mode_hint: {mode.upper()}")
 
-    # Drill-in: if we deterministically matched a candidate from the message,
-    # tell the LLM exactly who. Without this hint flash-lite often picks the
-    # most goal-relevant attendee instead of the one the user named.
-    if mode == "drill_in":
-        target = _match_candidate(message=message, candidates=candidates)
-        if target is not None:
-            parts.append(f"drill_target: {target.get('name', 'Unknown').strip()}")
-
-    # Per-mode candidate cap inside the prompt itself — initial gets a wider
-    # window so the user can filter on any field even when the matching
-    # attendee isn't in Pane 2's goal-ranked top 5.
-    cand_cap = MAX_INITIAL_CANDIDATES if mode == "initial" else MAX_CANDIDATES_FOR_LLM
-    capped = candidates[:cand_cap]
-    parts.append(f"\nCANDIDATES ({len(capped)}):")
-    for i, cand in enumerate(capped, start=1):
+    parts.append("\nCANDIDATES (top-{}):".format(len(candidates)))
+    for i, cand in enumerate(candidates, start=1):
         name = (cand.get("name") or "Unknown").strip()
         headline = (cand.get("headline") or "").strip()
         company = (cand.get("company") or "").strip()
@@ -1006,39 +388,11 @@ def _build_user_payload(
 
 
 def _truncate_for_mode(text: str, mode: str) -> str:
-    """Cap reply length per mode, but never clip the `Open with: "..."` line.
-
-    Drill-in + rapport replies must end in a complete quoted opener. A naive
-    char cap eats the closing quote when the bio runs long; we instead
-    trim the BIO portion to make room and stitch the opener back on intact.
-    """
     if mode == "drill_in":
-        return _truncate_protecting_opener(text, MAX_DRILL_CHARS)
+        return _truncate(text, MAX_DRILL_CHARS)
     if mode == "rapport":
-        return _truncate_protecting_opener(text, MAX_RAPPORT_CHARS)
+        return _truncate(text, MAX_RAPPORT_CHARS)
     return _truncate(text, MAX_LIST_CHARS)
-
-
-def _truncate_protecting_opener(text: str, cap: int) -> str:
-    """Cap to `cap` chars while keeping the `Open with: "..."` line intact."""
-    text = (text or "").strip()
-    if len(text) <= cap:
-        return text
-
-    m = _OPENER_RE.search(text)
-    if not m:
-        return _truncate(text, cap)
-
-    opener_start = m.start()
-    opener_line = text[opener_start : m.end()]
-    bio = text[:opener_start].rstrip()
-
-    join = "\n"
-    bio_budget = max(40, cap - len(opener_line) - len(join))
-    if len(bio) > bio_budget:
-        bio = _word_boundary_trim(bio, bio_budget)
-
-    return f"{bio}{join}{opener_line}"
 
 
 # ---------------------------------------------------------------------------
@@ -1068,54 +422,32 @@ def _truncate(text: str, limit: int) -> str:
     cut = text[: max(1, limit - 1)].rstrip()
     return cut + "…"
 
-
-_DEMO_TOP3 = (
-    "Top 3 tonight:\n"
-    "1) Sarah Chen — GP at Bessemer, leads health AI\n"
-    "2) Marcus Patel — ex-surgeon, AI advisor at a16z\n"
-    "3) Priya Shah — founder Medvana, recent bridge"
-)
-
-_DEMO_DRILL_MARCUS = (
-    "Marcus Patel — 20yrs ortho surgeon, pivoted to AI in 2022. "
-    "Posted yesterday about Whoop biometrics for clinical trials. "
-    "Open with: \"saw your Whoop thread — what wearable data are you most "
-    "bullish on for clinical use?\""
-)
-
-_DEMO_RAPPORT_PRIYA = (
-    'Priya. She\'s been "live-tweeting my boba shop tier list" all week '
-    'and just posted about Laufey at the Greek.\n'
-    'Open with: "Saw your boba tier list — what\'s the bar you\'re judging '
-    'on, ice or chew?"'
-)
-
-
 def _h1_initial(goal: str, candidates: list[dict[str, Any]]) -> str:
     if not candidates:
-        return _truncate(_DEMO_TOP3, MAX_LIST_CHARS)
+        ask = goal or "your goal"
+        return _truncate(
+            f"I checked the room and don't have strong matches for \"{ask}\" yet. "
+            "You're being a little vague, so give me role + stage + sector and "
+            "I'll rerank fast.",
+            MAX_LIST_CHARS,
+        )
 
-    lines: list[str] = []
-    for i, cand in enumerate(candidates[:3], start=1):
+    picks: list[str] = []
+    for cand in candidates[:3]:
         name = (cand.get("name") or "").strip() or "Unknown"
         one_liner = (cand.get("one_liner") or cand.get("headline") or "").strip()
-        one_liner = _word_boundary_trim(
-            re.sub(r"\s+", " ", one_liner), ONE_LINER_CAP
-        )
+        one_liner = re.sub(r"\s+", " ", one_liner)[:80]
         if not one_liner:
             one_liner = "in the room tonight"
-        lines.append(f"{i}) {name} — {one_liner}")
+        picks.append(f"{name} looks strong: {one_liner}.")
 
-    while len(lines) < 3:
-        idx = len(lines)
-        fallback = (
-            "Sarah Chen — GP at Bessemer, leads health AI",
-            "Marcus Patel — ex-surgeon, AI advisor at a16z",
-            "Priya Shah — founder Medvana, recent bridge",
-        )[idx]
-        lines.append(f"{idx + 1}) {fallback}")
+    body = " ".join(picks)
+    if len(picks) < 3:
+        body = (
+            f"{body} I'm short on high-signal options right now, so send one "
+            "more filter and I'll tighten this up."
+        )
 
-    body = "Top 3 tonight:\n" + "\n".join(lines)
     return _truncate(body, MAX_LIST_CHARS)
 
 
@@ -1123,7 +455,21 @@ def _h1_drill_in(message: str, candidates: list[dict[str, Any]]) -> str:
     target = _match_candidate(message=message, candidates=candidates)
 
     if target is None:
-        return _truncate(_DEMO_DRILL_MARCUS, MAX_DRILL_CHARS)
+        if candidates:
+            names = ", ".join(
+                (c.get("name") or "Unknown").strip() or "Unknown"
+                for c in candidates[:3]
+            )
+            return _truncate(
+                f"I can't tell who you mean, and I'm not a mind reader. "
+                f"Pick one name exactly: {names}.",
+                MAX_DRILL_CHARS,
+            )
+        return _truncate(
+            "I don't have attendee data loaded yet, so I can't drill in on a "
+            "person. Send your goal again and I'll refresh the list.",
+            MAX_DRILL_CHARS,
+        )
 
     name = (target.get("name") or "Unknown").strip()
     headline = (target.get("headline") or target.get("one_liner") or "").strip()
@@ -1133,23 +479,16 @@ def _h1_drill_in(message: str, candidates: list[dict[str, Any]]) -> str:
     if quote and len(quote) > 100:
         quote = quote[:97].rstrip() + "…"
 
-    # Tighten headline so the bio line stays demo-grade.
-    headline = _word_boundary_trim(
-        re.sub(r"\s+", " ", headline), ONE_LINER_CAP
-    )
     bio = f"{name} — {headline}." if headline else f"{name}."
     if quote:
-        # Take the first ~6 words of the quote for a tight opener hook.
-        hook_words = quote.split()[:6]
-        hook = " ".join(hook_words).rstrip(",.;:")
         body = (
-            f"{bio} Recent post: \"{quote}\".\n"
-            f'Open with: "Saw your post about {hook} — what got you onto that?"'
+            f"{bio} Recent post: \"{quote}\". "
+            f"Open with: \"saw your post — tell me more about that?\""
         )
     else:
         body = (
-            f"{bio} Worth grabbing 5 min.\n"
-            f'Open with: "What are you actually working on this week?"'
+            f"{bio} Worth grabbing 5 min. "
+            f"Open with: \"what are you working on right now?\""
         )
 
     return _truncate(body, MAX_DRILL_CHARS)
@@ -1238,7 +577,18 @@ def _h1_rapport(goal: str, candidates: list[dict[str, Any]]) -> str:
     pick = _pick_rapport_candidate(candidates)
 
     if pick is None:
-        return _truncate(_DEMO_RAPPORT_PRIYA, MAX_RAPPORT_CHARS)
+        if candidates:
+            first = (candidates[0].get("name") or "Unknown").strip() or "Unknown"
+            return _truncate(
+                f"{first} could work, but I don't have enough personal signal to "
+                "make it fun yet. Give me another vibe word and I'll find a better hit.",
+                MAX_RAPPORT_CHARS,
+            )
+        return _truncate(
+            "No social signal to work with yet. Tell me the vibe you want and "
+            "I'll try again with fresh matches.",
+            MAX_RAPPORT_CHARS,
+        )
 
     full_name = (pick.get("name") or "Unknown").strip()
     first = full_name.split()[0] if full_name else "Unknown"
@@ -1253,11 +603,9 @@ def _h1_rapport(goal: str, candidates: list[dict[str, Any]]) -> str:
     if len(words) > 12:
         quote = " ".join(words[:12])
 
-    # Tight hook (~6 words) so the salvaged opener stays conversational.
-    hook = " ".join(quote.split()[:6]).rstrip(",.;:")
     body = (
-        f'{name}. Recently posted "{quote}".\n'
-        f'Open with: "Saw your post about {hook} — what got you onto that?"'
+        f"{name}. Recently posted \"{quote}\". "
+        f"Open with that — it's a real interest, not work."
     )
     return _truncate(body, MAX_RAPPORT_CHARS)
 
@@ -1303,122 +651,4 @@ def _match_candidate(
     return None
 
 
-# ---------------------------------------------------------------------------
-# Meta-question handler
-# ---------------------------------------------------------------------------
-
-
-_EVENT_META_PATH = Path(__file__).resolve().parents[1] / "data" / "event_meta.json"
-_event_meta_cache: dict[str, Any] | None = None
-_META_FALLBACK_REPLY = (
-    "tbh idk that one — but if you want, just ask me about the people in "
-    "the room and i'll help."
-)
-
-
-def _load_event_meta() -> dict[str, Any]:
-    """Read data/event_meta.json once. Returns {} on any error."""
-    global _event_meta_cache
-    if _event_meta_cache is not None:
-        return _event_meta_cache
-    try:
-        with _EVENT_META_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        _event_meta_cache = data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("event_meta.load_failed err=%s", exc)
-        _event_meta_cache = {}
-    return _event_meta_cache
-
-
-def _handle_meta_question(
-    message: str, history: list[dict[str, str]]
-) -> str:
-    """Answer event/bot/venue questions in the casual house voice.
-
-    Falls back to a friendly redirect if the LLM is unavailable. Reads
-    data/event_meta.json (Pane 2's owned data) for grounded answers.
-    """
-    meta = _load_event_meta()
-    meta_blob = json.dumps(meta, ensure_ascii=False) if meta else "{}"
-
-    system_prompt = (
-        "You're WingmanAI — a friend helping someone navigate a networking "
-        "event over SMS. Answer casually, lowercase ok, contractions ok, "
-        "≤2 sentences. No preamble, no markdown.\n\n"
-        f"Event context: {meta_blob}\n\n"
-        "If the answer isn't in the event context (or you genuinely don't "
-        "know), redirect lightly with this exact line:\n"
-        f"  {_META_FALLBACK_REPLY}\n"
-        "Do not invent times, addresses, or details."
-    )
-
-    messages = [{"role": "system", "content": system_prompt}]
-    # Include only the last 4 history entries — meta questions are rarely
-    # multi-turn; keep the prompt cheap.
-    for entry in (history or [])[-4:]:
-        role = entry.get("role")
-        content = (entry.get("content") or "").strip()
-        if not content:
-            continue
-        messages.append(
-            {
-                "role": "assistant" if role == "assistant" else "user",
-                "content": content,
-            }
-        )
-    messages.append({"role": "user", "content": message})
-
-    reply = llm_client.chat(
-        messages=messages,
-        model=llm_client.MODEL_RANK,  # flash-lite — cheap, plenty for one sentence
-        temperature=0.4,
-        max_tokens=120,
-    )
-    if reply and reply.strip():
-        return reply.strip()
-
-    # LLM unavailable (no key, quota, network) — deterministic friendly redirect.
-    return _meta_question_h1(message=message, meta=meta)
-
-
-def _meta_question_h1(message: str, meta: dict[str, Any]) -> str:
-    """Deterministic answers for the most common meta questions.
-
-    Uses event_meta fields when the question is obviously about them; falls
-    back to the universal redirect otherwise. No LLM call.
-    """
-    lowered = message.lower()
-    venue = (meta.get("venue") or "").strip()
-    date = (meta.get("date") or "").strip()
-    name = (meta.get("event_name") or "").strip()
-
-    if venue and ("where" in lowered or "venue" in lowered or "address" in lowered or "location" in lowered):
-        return f"it's at {venue}."
-    if date and ("when" in lowered or "what time" in lowered or "date" in lowered):
-        return f"it's on {date}." if not name else f"{name} is on {date}."
-    if "wingman" in lowered or "what is this" in lowered or "who are you" in lowered:
-        return (
-            "i'm wingman — text me your goal for the event and i'll find "
-            "the 3 people in the room worth talking to."
-        )
-    return _META_FALLBACK_REPLY
-
-
-def warm_llm() -> bool:
-    """Pre-warm the Gemini connection. Call from FastAPI startup hook.
-
-    Wraps app.llm_client.warm(). Returns True on a clean ping. Never raises
-    — startup must not fail because the model is briefly unreachable.
-    See app/llm_client.py::warm for wiring example in app/main.py.
-    """
-    return llm_client.warm()
-
-
-__all__ = [
-    "extract_goal",
-    "rank_and_riff",
-    "warm_llm",
-    "classify_intent",
-    "should_persist_goal",
-]
+__all__ = ["extract_goal", "rank_and_riff"]

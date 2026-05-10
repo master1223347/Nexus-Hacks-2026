@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -44,12 +45,49 @@ _retrieval_module: Any = _safe_import("app.retrieval")
 logger = logging.getLogger("wingman.orchestrator")
 
 RETRIEVAL_TIMEOUT_S = 5.0
-# Gemini Flash Lite cold-start ~1.7s, warm ~1.1s, observed outliers up to
-# ~5.7s. 3.0s covers both cold-start and warm calls without letting tail
-# latency cascade into a 7s SMS RTT.
-LLM_TIMEOUT_S = 3.0
-FALLBACK_REPLY = "one sec — give me another nudge"
+LLM_TIMEOUT_S = float(os.environ.get("WINGMAN_LLM_ORCH_TIMEOUT_S", "2.5"))
+FALLBACK_REPLY = "Still loading context — give me one more clear nudge."
 DEFAULT_TOP_K = 10
+
+_CHITCHAT_EXACT: frozenset[str] = frozenset(
+    {
+        "hi",
+        "hey",
+        "hello",
+        "yo",
+        "sup",
+        "hola",
+        "hii",
+        "hiii",
+        "hi doss",
+        "hey doss",
+        "what's up",
+        "whats up",
+    }
+)
+
+_GOAL_HINTS: tuple[str, ...] = (
+    "looking for",
+    "people",
+    "person",
+    "ml",
+    "ai",
+    "engineer",
+    "engineers",
+    "investor",
+    "investors",
+    "founder",
+    "cofounder",
+    "co-founder",
+    "background",
+    "backgrounds",
+    "hiring",
+    "hire",
+    "raising",
+    "seed",
+    "series",
+    "from ",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +166,36 @@ def extract_goal(body: str) -> str:
     return " ".join((body or "").split()).strip()
 
 
+def _goal_signal_score(text: str) -> int:
+    """Higher score means more likely to be a real networking goal."""
+    cleaned = extract_goal(text).lower()
+    if not cleaned:
+        return 0
+    if cleaned in _CHITCHAT_EXACT:
+        return -2
+
+    score = 0
+    for hint in _GOAL_HINTS:
+        if hint in cleaned:
+            score += 2
+
+    # Longer messages are usually more intent-rich than pure greetings.
+    if len(cleaned) >= 18:
+        score += 1
+    if len(cleaned.split()) >= 4:
+        score += 1
+    return score
+
+
+def _should_store_goal(current_goal: str | None, message: str) -> bool:
+    """Decide whether to set/replace goal from current message."""
+    incoming = _goal_signal_score(message)
+    if current_goal is None or not current_goal.strip():
+        return incoming >= 2
+    current = _goal_signal_score(current_goal)
+    return incoming > current
+
+
 async def _run_with_timeout(
     fn: Callable[..., Any],
     args: tuple,
@@ -175,9 +243,10 @@ async def handle_sms_turn(from_phone: str, body: str) -> SmsTurnResult:
 
     history = get_history(from_phone) or []
     goal = get_goal(from_phone)
-    if not goal and body:
-        goal = extract_goal(body)
-        if goal:
+    if body:
+        proposed_goal = extract_goal(body)
+        if proposed_goal and _should_store_goal(goal, proposed_goal):
+            goal = proposed_goal
             set_goal(from_phone, goal)
 
     # Retrieval — 5s budget. Skip entirely when goal is empty.
@@ -192,7 +261,7 @@ async def handle_sms_turn(from_phone: str, body: str) -> SmsTurnResult:
         if ok and isinstance(result, list):
             candidates = result
 
-    # LLM — 1.5s budget. On miss, hand back the fallback reply.
+    # LLM — bounded budget. On miss, hand back the fallback reply.
     reply: str
     result, ok = await _run_with_timeout(
         rank_and_riff,

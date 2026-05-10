@@ -47,6 +47,26 @@ def test_build_twiml_wraps_reply() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_sms_turn_does_not_lock_chitchat_as_goal(monkeypatch) -> None:
+    monkeypatch.setattr(
+        orchestrator, "find_candidates", lambda g, k=10: [{"name": "Buvani"}]
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "rank_and_riff",
+        lambda goal, cands, msg, hist: f"goal={goal} top={cands[0]['name']}",
+    )
+
+    phone = "+15555550901"
+    first = await handle_sms_turn(phone, "hi doss")
+    second = await handle_sms_turn(phone, "people with strong ML backgrounds")
+
+    assert first.goal is None
+    assert second.goal == "people with strong ML backgrounds"
+    assert "goal=people with strong ML backgrounds" in second.reply
+
+
+@pytest.mark.asyncio
 async def test_handle_sms_turn_uses_fallback_on_llm_timeout(monkeypatch) -> None:
     """When the llm call exceeds its budget, the fallback reply ships."""
 
