@@ -6,8 +6,8 @@ Public surface (Pane 1 imports this directly):
 
 Strategy:
   - Deterministic router (`_route`) picks the mode from message + candidates.
-  - When OPENAI_API_KEY is set: assemble a single composite-prompt LLM call
-    via app.llm_client.chat(). The system prompt covers all three modes
+  - When an LLM provider key is set: assemble a single composite-prompt LLM
+    call via app.llm_client.chat(). The system prompt covers all three modes
     (initial / drill-in / rapport). The user message carries the mode hint,
     so the LLM has both a strong prior and the freedom to override.
   - When the LLM is unavailable, returns NEED_MORE_DATA, or the response
@@ -19,7 +19,6 @@ Strategy:
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any
 
@@ -227,7 +226,7 @@ def _try_llm(
     history: list[dict[str, str]],
 ) -> str | None:
     """Single-call LLM dispatch. Returns SMS text or None on any failure."""
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
+    if not llm_client.is_configured():
         return None
 
     system_prompt = _build_system_prompt()
