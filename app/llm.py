@@ -32,6 +32,8 @@ from app.prompts.rank import (
     FALLBACK_REPLY,
     LIMITED_MATCHES_PREAMBLE,
     NEED_MORE_DATA,
+    NO_MATCH_FOOTER,
+    NO_MATCH_PREAMBLE,
     SYSTEM_DRILL_IN,
     SYSTEM_INITIAL,
 )
@@ -53,11 +55,13 @@ _OPENER_RE = re.compile(r'Open with:\s*"([^"\n]{5,})"', re.IGNORECASE)
 class _RankItem(BaseModel):
     name: str
     one_liner: str
+    quoted_post: str | None = None
 
 
 class _RankResponse(BaseModel):
     top_3: list[_RankItem]
     under_filled: bool = False
+    no_match: bool = False
 
 # SMS budgets (verified by scripts/eval_rapport.py).
 # MAX_LIST_CHARS bumped to 480 to fit 3 × 100-char bios + the optional
@@ -69,6 +73,10 @@ MAX_RAPPORT_CHARS = 320
 
 # Cap how many candidates we hand the LLM (token cost). Pane 2 returns up to 10.
 MAX_CANDIDATES_FOR_LLM = 5
+# Initial-mode wider window: the user can filter on any field, and the
+# matching attendee may rank low under Pane 2's goal-keyword retrieval.
+# 15 candidates × ~6 fields each ≈ 12KB of context — fine for flash-lite.
+MAX_INITIAL_CANDIDATES = 15
 # Cap how many history entries we hand the LLM.
 MAX_HISTORY_FOR_LLM = 6
 
@@ -171,6 +179,83 @@ _PEOPLE_INTENT_HINTS = (
     "want to meet",
 )
 
+# inappropriate_query patterns. Whole-word matches; the wider phrase patterns
+# (e.g. 'hot girls') are precise enough to leave 'hot takes' / 'hot AI' alone.
+_INAPPROPRIATE_PATTERNS = (
+    re.compile(r"\bbaddies?\b", re.IGNORECASE),
+    re.compile(r"\bcuties?\b", re.IGNORECASE),
+    re.compile(r"\bbabes?\b", re.IGNORECASE),
+    re.compile(r"\bhotties?\b", re.IGNORECASE),
+    re.compile(
+        r"\bhot\s+(?:girls?|guys?|men|women|chicks?|babes?|people|ones?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\brank(?:ed|ing)?\s+by\s+(?:looks?|attractiveness|appearance|hotness)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:cute|attractive|good[- ]?looking)\s+(?:girls?|guys?|men|women|people)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsingle\s+(?:girls?|guys?|women|men|chicks?|dudes?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bhook[- ]?up\b", re.IGNORECASE),
+    re.compile(r"\btinder\b", re.IGNORECASE),
+)
+
+INAPPROPRIATE_REPLY = (
+    "i don't filter on appearance — but tell me what you actually want from "
+    "the room and i'll find them. e.g. 'i'm raising a seed' or 'i need a "
+    "technical cofounder'."
+)
+
+# Tiebreaker for rapport: when one of these terms appears in the message,
+# the user has a concrete filter even if the message is socially framed
+# ("anyone fun who works at meta" -> initial, not rapport).
+_FILTER_TERMS = (
+    # tech / infra
+    "rag", "ml", "llm", "ai", "gpu", "cuda", "kubernetes", "postgres",
+    "kafka", "react", "rust", "golang", "python", "swift", "ios", "android",
+    "ai infra", "agentic", "embedding", "vector",
+    # credentials / roles
+    "phd", "ph.d", "ph.d.", "mba", "master", "masters", "intern",
+    "founder", "co-founder", "cofounder", "ceo", "cto", "vp", "director",
+    "engineer", "designer", "researcher", "scientist", "investor",
+    "vc", "vcs",
+    # categories
+    "b2b", "b2c", "saas", "fintech", "healthtech", "biotech", "edtech",
+    "med-tech", "medtech", "yc", "y combinator", "y-combinator",
+    # universities (commonly typed lowercase by SMS users)
+    "cmu", "mit", "stanford", "berkeley", "ucb", "ucla", "harvard",
+    "princeton", "cornell", "columbia", "ucsd", "ucsf", "purdue",
+    "carnegie mellon", "ucr",
+    # common employers
+    "meta", "google", "openai", "anthropic", "stripe", "amazon", "apple",
+    "microsoft", "nvidia", "deepmind", "linkedin", "uber", "airbnb",
+    "tesla", "spacex", "palantir", "oracle", "salesforce", "adobe",
+    "instacart", "doordash", "perplexity", "scale ai",
+)
+_FILTER_TERMS_RE = re.compile(
+    r"\b(" + "|".join(re.escape(t) for t in _FILTER_TERMS) + r")\b",
+    re.IGNORECASE,
+)
+_ACRONYM_RE = re.compile(r"\b[A-Z]{2,}\b")
+
+
+def _has_concrete_filter(message: str) -> bool:
+    """True iff the message contains a concrete filter term (tech / role /
+    employer / school / acronym). Used to break the rapport tie."""
+    if not message:
+        return False
+    if _FILTER_TERMS_RE.search(message):
+        return True
+    if _ACRONYM_RE.search(message):
+        return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -233,6 +318,12 @@ def rank_and_riff(
             len(recent_history),
         )
 
+        # Inappropriate queries: hardcoded redirect, ZERO LLM cost. Skip
+        # retrieval entirely. The candidates list is intentionally not
+        # forwarded to any model.
+        if mode == "inappropriate_query":
+            return INAPPROPRIATE_REPLY
+
         # Meta questions bypass attendee ranking entirely — answer from the
         # event_meta context, never poison the user's goal.
         if mode == "meta_question":
@@ -248,7 +339,9 @@ def rank_and_riff(
         #   rapport  -> wider window — rapport pick should not be constrained
         #               to the goal-ranked top 5; matcha/boba people may rank
         #               low for the user's stated goal but high for rapport.
-        #   initial  -> top-5 (goal-fit is the right signal here).
+        #   initial  -> wider still (≤15). The user can filter on any field
+        #               (CMU / Meta / RAG / PhD) and the matching attendee
+        #               may not be in Pane 2's goal-ranked top 5.
         if mode == "drill_in":
             target = _match_candidate(message=message or "", candidates=all_cands)
             candidates_for_pick = (
@@ -257,7 +350,7 @@ def rank_and_riff(
         elif mode == "rapport":
             candidates_for_pick = all_cands[:10]
         else:
-            candidates_for_pick = all_cands[:MAX_CANDIDATES_FOR_LLM]
+            candidates_for_pick = all_cands[:MAX_INITIAL_CANDIDATES]
 
         # Try the LLM. _try_llm() returns None when the call is unavailable
         # or the output fails a hard quality check.
@@ -289,33 +382,48 @@ def rank_and_riff(
 
 
 def _route(message: str, candidates: list[dict[str, Any]]) -> str:
-    """Return one of: 'initial' | 'drill_in' | 'rapport' | 'meta_question'.
+    """Return one of:
+      'initial' | 'drill_in' | 'rapport' | 'meta_question' | 'inappropriate_query'.
 
-    Order matters:
+    Order:
+      inappropriate_query — wins over EVERYTHING. We never honor the
+                            inappropriate framing even if it's wrapped in
+                            "tell me about" or "anyone fun".
       drill_in   — explicit "tell me about <name>" or a candidate-name match.
-      rapport    — explicit fun/casual ask.
+      rapport    — explicit fun/casual ask, BUT only when there's no concrete
+                   filter (proper noun, technical term, role, school).
+                   "anyone fun who works at meta" -> initial, not rapport.
       meta       — questions about the event, bot, venue, or how-to.
       initial    — default attendee-ranking ask.
-
-    drill-in beats the rest because a user can legitimately say "tell me
-    about marcus, who's fun?" and we want the direct-name signal to win.
-    Meta wins over initial because "what time is the event" should NOT be
-    persisted as a goal (the bug this routing fix is here to prevent).
     """
-    lowered = (message or "").lower()
+    msg = message or ""
+    lowered = msg.lower()
+
+    if _is_inappropriate(msg):
+        return "inappropriate_query"
 
     if any(verb in lowered for verb in _DRILL_VERBS):
         return "drill_in"
-    if _match_candidate(message=message, candidates=candidates) is not None:
+    if _match_candidate(message=msg, candidates=candidates) is not None:
         return "drill_in"
 
-    if any(re.search(rf"\b{re.escape(kw)}\b", lowered) for kw in _RAPPORT_KEYWORDS):
+    has_rapport_kw = any(
+        re.search(rf"\b{re.escape(kw)}\b", lowered) for kw in _RAPPORT_KEYWORDS
+    )
+    if has_rapport_kw and not _has_concrete_filter(msg):
         return "rapport"
 
-    if _is_meta_question(message=message):
+    if _is_meta_question(message=msg):
         return "meta_question"
 
     return "initial"
+
+
+def _is_inappropriate(message: str) -> bool:
+    """True iff the message is filtering people on looks / dating frames."""
+    if not message:
+        return False
+    return any(rgx.search(message) for rgx in _INAPPROPRIATE_PATTERNS)
 
 
 def _is_meta_question(message: str) -> bool:
@@ -357,8 +465,9 @@ def classify_intent(
 def should_persist_goal(message: str) -> bool:
     """One-line check Pane 1 can wrap around set_goal() in the orchestrator.
 
-    Returns False when the message is a meta_question (so the existing real
-    goal stays put). Returns True for any people-search intent.
+    Returns False when the message is a meta_question or inappropriate_query
+    (so the existing real goal stays put). Returns True for any genuine
+    people-search intent.
 
     Suggested wiring in app/orchestrator.py:
 
@@ -367,7 +476,8 @@ def should_persist_goal(message: str) -> bool:
             if goal:
                 set_goal(from_phone, goal)
     """
-    return classify_intent(message) != "meta_question"
+    intent = classify_intent(message)
+    return intent not in ("meta_question", "inappropriate_query")
 
 
 # ---------------------------------------------------------------------------
@@ -594,38 +704,43 @@ def _try_llm_initial(
     if parsed is None:
         return None
 
-    # The SDK may hand us a parsed Pydantic model OR a raw dict.
     raw_items = (
         parsed.top_3
         if hasattr(parsed, "top_3")
         else (parsed.get("top_3") if isinstance(parsed, dict) else None)
     )
-    under_filled = bool(
-        getattr(parsed, "under_filled", False)
-        if not isinstance(parsed, dict)
-        else parsed.get("under_filled", False)
-    )
+    under_filled = bool(_field(parsed, "under_filled", False))
+    no_match = bool(_field(parsed, "no_match", False))
+
     if not raw_items:
         return None
 
     items: list[dict[str, str]] = []
     for it in raw_items:
-        name = (
-            getattr(it, "name", None)
-            if not isinstance(it, dict)
-            else it.get("name")
-        )
-        one_liner = (
-            getattr(it, "one_liner", None)
-            if not isinstance(it, dict)
-            else it.get("one_liner")
-        )
+        name = _field(it, "name")
+        one_liner = _field(it, "one_liner")
+        quoted = _field(it, "quoted_post")
         if not name or not one_liner:
             continue
-        items.append({"name": str(name).strip(), "one_liner": str(one_liner).strip()})
+        clean_name = str(name).strip()
+        clean_liner = str(one_liner).strip()
+        # Strip a leading "{name} —" / "{name} -" / "{name}:" the model
+        # sometimes echoes into the one_liner; we render the name ourselves.
+        first_token = clean_name.split()[0] if clean_name else ""
+        for prefix in (clean_name, first_token):
+            if prefix and clean_liner.lower().startswith(prefix.lower()):
+                clean_liner = clean_liner[len(prefix):].lstrip(" —–-:")
+                break
+        items.append(
+            {
+                "name": clean_name,
+                "one_liner": clean_liner,
+                "quoted_post": (str(quoted).strip() if quoted else ""),
+            }
+        )
 
-    if len(items) < 3:
-        logger.info("llm_initial.short_list n=%d", len(items))
+    if not items:
+        logger.info("llm_initial.empty_after_parse")
         return None
 
     # Reject filler-laden one_liners across the whole reply.
@@ -635,8 +750,17 @@ def _try_llm_initial(
             logger.info("llm_initial.filler phrase=%r", phrase)
             return None
 
-    header = LIMITED_MATCHES_PREAMBLE if under_filled else ""
-    lines = [(header + "Top 3 tonight:").rstrip()]
+    # No-match path: friendly redirect + closest-adjacent + widen offer.
+    if no_match:
+        return _format_no_match(goal=goal, items=items)
+
+    # Standard rank path. The user asked for a casual lowercase voice;
+    # "top picks tonight" beats "Top 3 tonight" for the friend tone.
+    header_lines: list[str] = []
+    if under_filled:
+        header_lines.append(LIMITED_MATCHES_PREAMBLE.rstrip())
+    header_lines.append("top picks tonight:")
+    lines = list(header_lines)
     for i, it in enumerate(items[:3], start=1):
         one_liner = _word_boundary_trim(
             re.sub(r"\s+", " ", it["one_liner"]), ONE_LINER_CAP
@@ -644,6 +768,28 @@ def _try_llm_initial(
         lines.append(f"{i}) {it['name']} — {one_liner}")
 
     body = "\n".join(lines)
+    return _truncate(body, MAX_LIST_CHARS)
+
+
+def _field(obj: Any, key: str, default: Any = None) -> Any:
+    """Read a field from a Pydantic model OR a dict (the SDK returns either)."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _format_no_match(goal: str, items: list[dict[str, str]]) -> str:
+    """Format the honest-miss reply: preamble + 1-3 closest + widen offer."""
+    quoted_goal = goal.strip() or "that"
+    lines = [NO_MATCH_PREAMBLE.format(goal=f'"{quoted_goal}"').rstrip()]
+    for i, it in enumerate(items[:3], start=1):
+        one_liner = _word_boundary_trim(
+            re.sub(r"\s+", " ", it["one_liner"]), ONE_LINER_CAP
+        )
+        lines.append(f"{i}) {it['name']} — {one_liner}")
+    body = "\n".join(lines) + NO_MATCH_FOOTER
     return _truncate(body, MAX_LIST_CHARS)
 
 
@@ -766,8 +912,13 @@ def _build_user_payload(
         if target is not None:
             parts.append(f"drill_target: {target.get('name', 'Unknown').strip()}")
 
-    parts.append("\nCANDIDATES (top-{}):".format(len(candidates)))
-    for i, cand in enumerate(candidates[:MAX_CANDIDATES_FOR_LLM], start=1):
+    # Per-mode candidate cap inside the prompt itself — initial gets a wider
+    # window so the user can filter on any field even when the matching
+    # attendee isn't in Pane 2's goal-ranked top 5.
+    cand_cap = MAX_INITIAL_CANDIDATES if mode == "initial" else MAX_CANDIDATES_FOR_LLM
+    capped = candidates[:cand_cap]
+    parts.append(f"\nCANDIDATES ({len(capped)}):")
+    for i, cand in enumerate(capped, start=1):
         name = (cand.get("name") or "Unknown").strip()
         headline = (cand.get("headline") or "").strip()
         company = (cand.get("company") or "").strip()
