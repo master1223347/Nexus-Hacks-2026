@@ -26,7 +26,7 @@ GEMINI_URL_TMPL = "https://generativelanguage.googleapis.com/v1beta/models/{mode
 DEFAULT_MODEL = os.environ.get("WINGMAN_LLM_MODEL", "gpt-4o-mini")
 # Pane 1 budget is 1.5s — keep our HTTP timeout below that so we can fall
 # back gracefully without Pane 1's outer wait_for() getting cancelled mid-call.
-DEFAULT_HTTP_TIMEOUT_S = float(os.environ.get("WINGMAN_LLM_TIMEOUT_S", "1.2"))
+DEFAULT_HTTP_TIMEOUT_S = float(os.environ.get("WINGMAN_LLM_TIMEOUT_S", "2.2"))
 
 
 class LLMUnavailable(Exception):
