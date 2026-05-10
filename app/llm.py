@@ -18,9 +18,11 @@ Strategy:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -134,6 +136,41 @@ _DRILL_VERBS = (
     "what about",
 )
 
+# meta_question heuristics — questions about the event, the bot, or anything
+# that ISN'T "find me people / tell me about someone / who's fun." We catch
+# the common phrasings cheap; ambiguous messages fall through to the LLM
+# classifier (`_classify_intent_llm`).
+_META_REGEXES = (
+    re.compile(r"\bwhat(?:'s|s|\s+is)?\s+the\s+(event|venue|address|location|wifi|password)\b", re.IGNORECASE),
+    re.compile(r"\bwhere(?:'s|s|\s+is)?\s+(this|the\s+event|it|here)\b", re.IGNORECASE),
+    re.compile(r"\bwhat\s+time\b", re.IGNORECASE),
+    re.compile(r"\bwhen\s+(does|is|will|do)\b", re.IGNORECASE),
+    re.compile(r"\bhow\s+(do|does|can)\s+(i|this|you|it)\b", re.IGNORECASE),
+    re.compile(r"\bwhat\s+(can|do)\s+you\s+do\b", re.IGNORECASE),
+    re.compile(r"\bwho\s+are\s+you\b", re.IGNORECASE),
+    re.compile(r"\bwhat\s+(is|are)\s+(wingman|this|you)\b", re.IGNORECASE),
+    re.compile(r"\bhelp\b", re.IGNORECASE),
+)
+
+# Phrases that strongly suggest an attendee-search intent (initial/drill/rapport).
+# If any of these appear we skip meta classification entirely — "find me a med-tech
+# investor at this event" should NOT route to meta just because it mentions "event".
+_PEOPLE_INTENT_HINTS = (
+    "find me",
+    "find a",
+    "find someone",
+    "any vc",
+    "any vcs",
+    "anyone",
+    "tell me about",
+    "who is ",
+    "who should",
+    "show me",
+    "people who",
+    "looking for",
+    "want to meet",
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -180,6 +217,30 @@ def rank_and_riff(
         recent_history = list(history or [])[-MAX_HISTORY_FOR_LLM:]
         mode = _route(message=message or "", candidates=all_cands)
 
+        # Defensive: if the stored goal is itself a meta-question (poisoned
+        # by a previous turn before Pane 1's guard was wired), ignore it
+        # so it doesn't skew the rank.
+        effective_goal = goal or ""
+        if effective_goal and _is_meta_question(message=effective_goal):
+            logger.info("rank_and_riff.goal_poisoned cleared=%r", effective_goal)
+            effective_goal = ""
+
+        logger.info(
+            "llm_route mode=%s goal_set=%s n_candidates=%d hist=%d",
+            mode,
+            bool(effective_goal),
+            len(all_cands),
+            len(recent_history),
+        )
+
+        # Meta questions bypass attendee ranking entirely — answer from the
+        # event_meta context, never poison the user's goal.
+        if mode == "meta_question":
+            return _handle_meta_question(
+                message=message or "",
+                history=recent_history,
+            )
+
         # Per-mode candidate window:
         #   drill_in -> JUST the named target. Cross-pollination across
         #               attendee posts hallucinates badly otherwise.
@@ -198,19 +259,11 @@ def rank_and_riff(
         else:
             candidates_for_pick = all_cands[:MAX_CANDIDATES_FOR_LLM]
 
-        logger.info(
-            "llm_route mode=%s goal_set=%s n_candidates=%d hist=%d",
-            mode,
-            bool(goal),
-            len(all_cands),
-            len(recent_history),
-        )
-
         # Try the LLM. _try_llm() returns None when the call is unavailable
         # or the output fails a hard quality check.
         llm_reply = _try_llm(
             mode=mode,
-            goal=goal or "",
+            goal=effective_goal,
             candidates=candidates_for_pick,
             message=message or "",
             history=recent_history,
@@ -220,7 +273,10 @@ def rank_and_riff(
 
         # H1 deterministic fallback path.
         return _h1_render(
-            mode=mode, goal=goal or "", candidates=all_cands, message=message or ""
+            mode=mode,
+            goal=effective_goal,
+            candidates=all_cands,
+            message=message or "",
         )
     except Exception:  # pragma: no cover — defensive; demo must never 500
         logger.exception("rank_and_riff failed; returning FALLBACK_REPLY")
@@ -233,13 +289,20 @@ def rank_and_riff(
 
 
 def _route(message: str, candidates: list[dict[str, Any]]) -> str:
-    """Return one of: 'initial' | 'drill_in' | 'rapport'.
+    """Return one of: 'initial' | 'drill_in' | 'rapport' | 'meta_question'.
 
-    Order matters: drill-in beats rapport beats initial because a user can
-    legitimately say "tell me about marcus, who's fun?" and we want the
-    direct-name signal to win.
+    Order matters:
+      drill_in   — explicit "tell me about <name>" or a candidate-name match.
+      rapport    — explicit fun/casual ask.
+      meta       — questions about the event, bot, venue, or how-to.
+      initial    — default attendee-ranking ask.
+
+    drill-in beats the rest because a user can legitimately say "tell me
+    about marcus, who's fun?" and we want the direct-name signal to win.
+    Meta wins over initial because "what time is the event" should NOT be
+    persisted as a goal (the bug this routing fix is here to prevent).
     """
-    lowered = message.lower()
+    lowered = (message or "").lower()
 
     if any(verb in lowered for verb in _DRILL_VERBS):
         return "drill_in"
@@ -249,7 +312,62 @@ def _route(message: str, candidates: list[dict[str, Any]]) -> str:
     if any(re.search(rf"\b{re.escape(kw)}\b", lowered) for kw in _RAPPORT_KEYWORDS):
         return "rapport"
 
+    if _is_meta_question(message=message):
+        return "meta_question"
+
     return "initial"
+
+
+def _is_meta_question(message: str) -> bool:
+    """True iff the message is asking about the event/bot/venue, not people.
+
+    Cheap heuristic: explicit people-intent hints disqualify; otherwise any
+    of the meta regexes wins. Pane 1 calls `classify_intent()` (which wraps
+    this) before set_goal() to avoid the "what time is the event" goal-
+    poisoning bug.
+    """
+    if not message:
+        return False
+    lowered = message.lower()
+    if any(hint in lowered for hint in _PEOPLE_INTENT_HINTS):
+        return False
+    return any(rgx.search(message) for rgx in _META_REGEXES)
+
+
+def classify_intent(
+    message: str, candidates: list[dict[str, Any]] | None = None
+) -> str:
+    """Public intent classifier — same modes as `_route`.
+
+    Pane 1 should call this BEFORE persisting a goal. When the result is
+    'meta_question', skip set_goal() so the caller's prior real goal isn't
+    overwritten by something like "what time is the event".
+
+    Example wiring in app/orchestrator.py:
+
+        intent = classify_intent(body)
+        if not goal and body and intent != 'meta_question':
+            goal = extract_goal(body)
+            if goal:
+                set_goal(from_phone, goal)
+    """
+    return _route(message=message or "", candidates=list(candidates or []))
+
+
+def should_persist_goal(message: str) -> bool:
+    """One-line check Pane 1 can wrap around set_goal() in the orchestrator.
+
+    Returns False when the message is a meta_question (so the existing real
+    goal stays put). Returns True for any people-search intent.
+
+    Suggested wiring in app/orchestrator.py:
+
+        if not goal and body and should_persist_goal(body):
+            goal = extract_goal(body)
+            if goal:
+                set_goal(from_phone, goal)
+    """
+    return classify_intent(message) != "meta_question"
 
 
 # ---------------------------------------------------------------------------
@@ -987,6 +1105,108 @@ def _match_candidate(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Meta-question handler
+# ---------------------------------------------------------------------------
+
+
+_EVENT_META_PATH = Path(__file__).resolve().parents[1] / "data" / "event_meta.json"
+_event_meta_cache: dict[str, Any] | None = None
+_META_FALLBACK_REPLY = (
+    "tbh idk that one — but if you want, just ask me about the people in "
+    "the room and i'll help."
+)
+
+
+def _load_event_meta() -> dict[str, Any]:
+    """Read data/event_meta.json once. Returns {} on any error."""
+    global _event_meta_cache
+    if _event_meta_cache is not None:
+        return _event_meta_cache
+    try:
+        with _EVENT_META_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        _event_meta_cache = data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("event_meta.load_failed err=%s", exc)
+        _event_meta_cache = {}
+    return _event_meta_cache
+
+
+def _handle_meta_question(
+    message: str, history: list[dict[str, str]]
+) -> str:
+    """Answer event/bot/venue questions in the casual house voice.
+
+    Falls back to a friendly redirect if the LLM is unavailable. Reads
+    data/event_meta.json (Pane 2's owned data) for grounded answers.
+    """
+    meta = _load_event_meta()
+    meta_blob = json.dumps(meta, ensure_ascii=False) if meta else "{}"
+
+    system_prompt = (
+        "You're WingmanAI — a friend helping someone navigate a networking "
+        "event over SMS. Answer casually, lowercase ok, contractions ok, "
+        "≤2 sentences. No preamble, no markdown.\n\n"
+        f"Event context: {meta_blob}\n\n"
+        "If the answer isn't in the event context (or you genuinely don't "
+        "know), redirect lightly with this exact line:\n"
+        f"  {_META_FALLBACK_REPLY}\n"
+        "Do not invent times, addresses, or details."
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+    # Include only the last 4 history entries — meta questions are rarely
+    # multi-turn; keep the prompt cheap.
+    for entry in (history or [])[-4:]:
+        role = entry.get("role")
+        content = (entry.get("content") or "").strip()
+        if not content:
+            continue
+        messages.append(
+            {
+                "role": "assistant" if role == "assistant" else "user",
+                "content": content,
+            }
+        )
+    messages.append({"role": "user", "content": message})
+
+    reply = llm_client.chat(
+        messages=messages,
+        model=llm_client.MODEL_RANK,  # flash-lite — cheap, plenty for one sentence
+        temperature=0.4,
+        max_tokens=120,
+    )
+    if reply and reply.strip():
+        return reply.strip()
+
+    # LLM unavailable (no key, quota, network) — deterministic friendly redirect.
+    return _meta_question_h1(message=message, meta=meta)
+
+
+def _meta_question_h1(message: str, meta: dict[str, Any]) -> str:
+    """Deterministic answers for the most common meta questions.
+
+    Uses event_meta fields when the question is obviously about them; falls
+    back to the universal redirect otherwise. No LLM call.
+    """
+    lowered = message.lower()
+    venue = (meta.get("venue") or "").strip()
+    date = (meta.get("date") or "").strip()
+    name = (meta.get("event_name") or "").strip()
+
+    if venue and ("where" in lowered or "venue" in lowered or "address" in lowered or "location" in lowered):
+        return f"it's at {venue}."
+    if date and ("when" in lowered or "what time" in lowered or "date" in lowered):
+        return f"it's on {date}." if not name else f"{name} is on {date}."
+    if "wingman" in lowered or "what is this" in lowered or "who are you" in lowered:
+        return (
+            "i'm wingman — text me your goal for the event and i'll find "
+            "the 3 people in the room worth talking to."
+        )
+    return _META_FALLBACK_REPLY
+
+
 def warm_llm() -> bool:
     """Pre-warm the Gemini connection. Call from FastAPI startup hook.
 
@@ -997,4 +1217,10 @@ def warm_llm() -> bool:
     return llm_client.warm()
 
 
-__all__ = ["extract_goal", "rank_and_riff", "warm_llm"]
+__all__ = [
+    "extract_goal",
+    "rank_and_riff",
+    "warm_llm",
+    "classify_intent",
+    "should_persist_goal",
+]
