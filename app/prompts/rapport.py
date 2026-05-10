@@ -28,12 +28,13 @@ HARD RULES:
   not invent. Do not pick the least-bad candidate.
 - ≤320 chars total.
 - Format:
-    <Name>. <one sentence with the verbatim quoted phrase in double quotes>.
-    Open with <topic from the quote>.
+    <Short paragraph in sentences only. Include Name, one sentence with the
+    verbatim quoted phrase in double quotes, and one sentence that starts
+    with "Open with".>
 - Forbidden phrases: "works in tech", "passionate about", "interested in",
   "loves innovation", "thought leader", "in the space of", "excited about",
   "passionate".
-- No preamble, no closing line, no markdown.
+- No bullet points, no numbered lists, no markdown.
 
 Selection priority (pick the FIRST that applies):
   1. A recent_post mentioning a specific place, food, drink, song, or hobby.

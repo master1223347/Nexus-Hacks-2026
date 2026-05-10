@@ -302,12 +302,23 @@ def _build_system_prompt() -> str:
         "The user message includes a 'mode_hint' line — trust it unless the "
         "message clearly contradicts it.\n"
     )
+    style = (
+        "Voice and style:\n"
+        "- Sound like a sharp, human friend over text.\n"
+        "- Use light slang sparingly (0-2 casual terms).\n"
+        "- You may use one playful jab max (light roast energy), but keep it "
+        "respectful and non-abusive.\n"
+        "- Never insult identity, appearance, health, or protected traits.\n"
+        "- Keep replies in sentence/paragraph format. No bullet points or "
+        "numbered lists.\n"
+    )
 
     return "\n\n".join(
         [
             "You are WingmanAI, a real-time networking copilot delivered over SMS.",
             "You operate in exactly one of three modes per request.",
             routing,
+            style,
             SYSTEM_INITIAL,
             SYSTEM_DRILL_IN,
             SYSTEM_RAPPORT,
@@ -411,51 +422,32 @@ def _truncate(text: str, limit: int) -> str:
     cut = text[: max(1, limit - 1)].rstrip()
     return cut + "…"
 
-
-_DEMO_TOP3 = (
-    "Top 3 tonight:\n"
-    "1) Sarah Chen — GP at Bessemer, leads health AI\n"
-    "2) Marcus Patel — ex-surgeon, AI advisor at a16z\n"
-    "3) Priya Shah — founder Medvana, recent bridge"
-)
-
-_DEMO_DRILL_MARCUS = (
-    "Marcus Patel — 20yrs ortho surgeon, pivoted to AI in 2022. "
-    "Posted yesterday about Whoop biometrics for clinical trials. "
-    "Open with: \"saw your Whoop thread — what wearable data are you most "
-    "bullish on for clinical use?\""
-)
-
-_DEMO_RAPPORT_PRIYA = (
-    "Priya. She's been \"live-tweeting my boba shop tier list\" all week "
-    "and just posted about Laufey at the Greek. Open with boba spots in "
-    "the area."
-)
-
-
 def _h1_initial(goal: str, candidates: list[dict[str, Any]]) -> str:
     if not candidates:
-        return _truncate(_DEMO_TOP3, MAX_LIST_CHARS)
+        ask = goal or "your goal"
+        return _truncate(
+            f"I checked the room and don't have strong matches for \"{ask}\" yet. "
+            "You're being a little vague, so give me role + stage + sector and "
+            "I'll rerank fast.",
+            MAX_LIST_CHARS,
+        )
 
-    lines: list[str] = []
-    for i, cand in enumerate(candidates[:3], start=1):
+    picks: list[str] = []
+    for cand in candidates[:3]:
         name = (cand.get("name") or "").strip() or "Unknown"
         one_liner = (cand.get("one_liner") or cand.get("headline") or "").strip()
         one_liner = re.sub(r"\s+", " ", one_liner)[:80]
         if not one_liner:
             one_liner = "in the room tonight"
-        lines.append(f"{i}) {name} — {one_liner}")
+        picks.append(f"{name} looks strong: {one_liner}.")
 
-    while len(lines) < 3:
-        idx = len(lines)
-        fallback = (
-            "Sarah Chen — GP at Bessemer, leads health AI",
-            "Marcus Patel — ex-surgeon, AI advisor at a16z",
-            "Priya Shah — founder Medvana, recent bridge",
-        )[idx]
-        lines.append(f"{idx + 1}) {fallback}")
+    body = " ".join(picks)
+    if len(picks) < 3:
+        body = (
+            f"{body} I'm short on high-signal options right now, so send one "
+            "more filter and I'll tighten this up."
+        )
 
-    body = "Top 3 tonight:\n" + "\n".join(lines)
     return _truncate(body, MAX_LIST_CHARS)
 
 
@@ -463,7 +455,21 @@ def _h1_drill_in(message: str, candidates: list[dict[str, Any]]) -> str:
     target = _match_candidate(message=message, candidates=candidates)
 
     if target is None:
-        return _truncate(_DEMO_DRILL_MARCUS, MAX_DRILL_CHARS)
+        if candidates:
+            names = ", ".join(
+                (c.get("name") or "Unknown").strip() or "Unknown"
+                for c in candidates[:3]
+            )
+            return _truncate(
+                f"I can't tell who you mean, and I'm not a mind reader. "
+                f"Pick one name exactly: {names}.",
+                MAX_DRILL_CHARS,
+            )
+        return _truncate(
+            "I don't have attendee data loaded yet, so I can't drill in on a "
+            "person. Send your goal again and I'll refresh the list.",
+            MAX_DRILL_CHARS,
+        )
 
     name = (target.get("name") or "Unknown").strip()
     headline = (target.get("headline") or target.get("one_liner") or "").strip()
@@ -571,7 +577,18 @@ def _h1_rapport(goal: str, candidates: list[dict[str, Any]]) -> str:
     pick = _pick_rapport_candidate(candidates)
 
     if pick is None:
-        return _truncate(_DEMO_RAPPORT_PRIYA, MAX_RAPPORT_CHARS)
+        if candidates:
+            first = (candidates[0].get("name") or "Unknown").strip() or "Unknown"
+            return _truncate(
+                f"{first} could work, but I don't have enough personal signal to "
+                "make it fun yet. Give me another vibe word and I'll find a better hit.",
+                MAX_RAPPORT_CHARS,
+            )
+        return _truncate(
+            "No social signal to work with yet. Tell me the vibe you want and "
+            "I'll try again with fresh matches.",
+            MAX_RAPPORT_CHARS,
+        )
 
     full_name = (pick.get("name") or "Unknown").strip()
     first = full_name.split()[0] if full_name else "Unknown"

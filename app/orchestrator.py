@@ -45,7 +45,7 @@ logger = logging.getLogger("wingman.orchestrator")
 
 RETRIEVAL_TIMEOUT_S = 5.0
 LLM_TIMEOUT_S = 1.5
-FALLBACK_REPLY = "one sec — give me another nudge"
+FALLBACK_REPLY = "Still loading context — give me one more clear nudge."
 DEFAULT_TOP_K = 10
 
 
