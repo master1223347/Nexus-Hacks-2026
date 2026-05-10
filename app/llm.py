@@ -545,7 +545,7 @@ def _try_llm(
                                                only if eval drops below 9/10)
     """
     if not os.environ.get("GEMINI_API_KEY", "").strip():
-    """Single-call LLM dispatch. Returns SMS text or None on any failure."""
+        return None
     if not llm_client.is_configured():
         return None
 
