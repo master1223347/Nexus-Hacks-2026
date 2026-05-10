@@ -181,6 +181,10 @@ def _chat_gemini(
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_tokens,
+            # Disable internal "thinking" so the entire token budget is the
+            # visible response. Without this, gemini-2.5-* burns the budget
+            # on private reasoning and returns ~120 chars of text.
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     if system_text:

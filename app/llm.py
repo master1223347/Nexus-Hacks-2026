@@ -18,8 +18,10 @@ Strategy:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from app import llm_client
@@ -133,6 +135,64 @@ def extract_goal(message: str) -> str | None:
     return cleaned or None
 
 
+# ---------------------------------------------------------------------------
+# Special-intent constants and patterns (small_talk + inappropriate)
+# ---------------------------------------------------------------------------
+
+SMALL_TALK_REPLY = (
+    "hey! tell me what you're hunting and i'll point you somewhere — try "
+    "'find me ML engineers', 'anyone from CMU', or 'anyone fun to grab a "
+    "drink with'."
+)
+
+INAPPROPRIATE_REPLY = (
+    "i don't filter on appearance — but tell me what you actually want from "
+    "the room and i'll find them. e.g. 'i'm raising a seed' or 'i need a "
+    "technical cofounder'."
+)
+
+_SMALL_TALK_PATTERNS = (
+    re.compile(
+        r"^\s*(hi|hello|hey|yo|sup|wassup|wsp|howdy|hiya|aloha|"
+        r"hi\s+\w+|hello\s+\w+|hey\s+\w+)[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(what'?s\s+up|good\s+(morning|afternoon|evening|night))[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(thanks|thank\s+you|ty|tysm|cool|nice|got\s+it|"
+        r"ok|okay|k|kk|lol|haha|lmao|nvm|never\s*mind)[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+)
+
+_INAPPROPRIATE_PATTERNS = (
+    re.compile(r"\bbaddies?\b", re.IGNORECASE),
+    re.compile(r"\bcuties?\b", re.IGNORECASE),
+    re.compile(r"\bhotties?\b", re.IGNORECASE),
+    re.compile(
+        r"\bhot\s+(?:girls?|guys?|men|women|chicks?|babes?|people|ones?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bhook[- ]?up\b", re.IGNORECASE),
+    re.compile(r"\btinder\b", re.IGNORECASE),
+)
+
+
+def _is_small_talk(message: str) -> bool:
+    if not message or not message.strip():
+        return True
+    return any(rgx.search(message) for rgx in _SMALL_TALK_PATTERNS)
+
+
+def _is_inappropriate(message: str) -> bool:
+    if not message:
+        return False
+    return any(rgx.search(message) for rgx in _INAPPROPRIATE_PATTERNS)
+
+
 def rank_and_riff(
     goal: str,
     candidates: list[dict[str, Any]],
@@ -149,43 +209,113 @@ def rank_and_riff(
     Falls back to a safe on-topic string on any internal error.
     """
     try:
-        all_cands = list(candidates or [])
-        recent_history = list(history or [])[-MAX_HISTORY_FOR_LLM:]
-        mode = _route(message=message or "", candidates=all_cands)
+        # Hard guardrail: never serve looks-based filtering.
+        if _is_inappropriate(message or ""):
+            return INAPPROPRIATE_REPLY
 
-        # Drill-in needs the full list so users can name anyone, not just the
-        # top 5. Other modes operate on the LLM-budget slice.
-        candidates_for_pick = (
-            all_cands if mode == "drill_in" else all_cands[:MAX_CANDIDATES_FOR_LLM]
+        # Load full attendee corpus + event metadata directly. Ignore the
+        # `candidates` argument — give Gemini the full room so it can match
+        # on ANY field (name, school, company, recent posts, interests).
+        attendees = _load_attendees_full()
+        event_meta = _load_event_meta_full()
+
+        recent_history = list(history or [])[-MAX_HISTORY_FOR_LLM:]
+
+        system_prompt = _build_unified_system_prompt(
+            attendees=attendees, event_meta=event_meta
         )
+
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt}
+        ]
+        for h in recent_history:
+            role = h.get("role") or "user"
+            content = h.get("content") or ""
+            if content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": message or ""})
 
         logger.info(
-            "llm_route mode=%s goal_set=%s n_candidates=%d hist=%d",
-            mode,
-            bool(goal),
-            len(all_cands),
+            "rank_and_riff.simple n_attendees=%d hist=%d msg_len=%d",
+            len(attendees),
             len(recent_history),
+            len(message or ""),
         )
 
-        # Try the LLM. _try_llm() returns None when the call is unavailable
-        # or the output fails a hard quality check.
-        llm_reply = _try_llm(
-            mode=mode,
-            goal=goal or "",
-            candidates=candidates_for_pick,
-            message=message or "",
-            history=recent_history,
+        reply = llm_client.chat(
+            messages=messages,
+            temperature=0.5,
+            max_tokens=4000,
+            timeout_s=8.0,
         )
-        if llm_reply is not None:
-            return _truncate_for_mode(llm_reply, mode)
 
-        # H1 deterministic fallback path.
-        return _h1_render(
-            mode=mode, goal=goal or "", candidates=all_cands, message=message or ""
+        if reply and reply.strip():
+            return reply.strip()
+
+        # Last-ditch: LLM returned nothing. Tell the user honestly.
+        return (
+            "give me a sec — try again, or tell me what kind of person "
+            "you're trying to meet (e.g. 'find me ML engineers')."
         )
     except Exception:  # pragma: no cover — defensive; demo must never 500
         logger.exception("rank_and_riff failed; returning FALLBACK_REPLY")
         return FALLBACK_REPLY
+
+
+def _load_attendees_full() -> list[dict[str, Any]]:
+    """Load the full 20-attendee corpus from disk."""
+    try:
+        path = Path(__file__).resolve().parents[1] / "data" / "attendees.json"
+        with open(path, "r") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("attendees", [])
+        return []
+    except Exception:
+        logger.exception("failed to load attendees.json")
+        return []
+
+
+def _load_event_meta_full() -> dict[str, Any]:
+    """Load event metadata from disk."""
+    try:
+        path = Path(__file__).resolve().parents[1] / "data" / "event_meta.json"
+        with open(path, "r") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _build_unified_system_prompt(
+    attendees: list[dict[str, Any]], event_meta: dict[str, Any]
+) -> str:
+    """Single composite system prompt covering greetings, event Q, people search."""
+    return f"""You are WingmanAI, a friendly assistant helping someone navigate a networking event over SMS/WhatsApp.
+
+EVENT METADATA:
+{json.dumps(event_meta, ensure_ascii=False)}
+
+ATTENDEE LIST ({len(attendees)} people in the room — full data, including their public posts):
+{json.dumps(attendees, ensure_ascii=False, indent=2)}
+
+HOW TO REPLY:
+- If the user greets you (hi, hello, hey, yo, etc.) — greet back briefly in 1-2 sentences and ask what they're hunting (e.g. "hey! tell me what you're looking for — people in your stack, anyone from your school, or just someone fun to chat with").
+- If they ask about the event/venue/time/who-you-are — answer from EVENT METADATA, casual one-liner.
+- If they ask to find people ("find me X", "anyone who Y", "people with Z background", "anyone from CMU/Meta/etc.") — pick the BEST 1-3 matches from ATTENDEE LIST and for each, give a tight 1-line bio AND quote a specific item from their recent_posts verbatim. If no good matches, say so honestly.
+- If they ask "tell me about [name]" — find that person in ATTENDEE LIST. Give their bio in 1-2 sentences and suggest a real opening line they could say, referencing one of that person's recent_posts.
+- If they ask for someone fun/cool/interesting/to-grab-a-drink-with — pick someone with quotable recent activity. Suggest a real opener.
+- If their message is unclear or empty — ask what kind of person they're hunting.
+
+STYLE:
+- Casual lowercase voice ok. Light personality. Be specific, not generic.
+- Always reference REAL recent_posts content verbatim or near-verbatim when recommending someone. NEVER invent details.
+- Reply length: under 1500 chars total.
+- If the matched person has a `linkedin_url`, mention it naturally at the end (e.g. "his linkedin: <url>").
+- Don't use markdown headers, numbered lists with formal bullets, or "Open with:" labels — write like a friend texting.
+
+REPLY DIRECTLY TO THE USER'S MESSAGE — no preamble, no meta-commentary."""
 
 
 # ---------------------------------------------------------------------------
