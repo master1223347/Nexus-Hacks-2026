@@ -133,6 +133,64 @@ def extract_goal(message: str) -> str | None:
     return cleaned or None
 
 
+# ---------------------------------------------------------------------------
+# Special-intent constants and patterns (small_talk + inappropriate)
+# ---------------------------------------------------------------------------
+
+SMALL_TALK_REPLY = (
+    "hey! tell me what you're hunting and i'll point you somewhere — try "
+    "'find me ML engineers', 'anyone from CMU', or 'anyone fun to grab a "
+    "drink with'."
+)
+
+INAPPROPRIATE_REPLY = (
+    "i don't filter on appearance — but tell me what you actually want from "
+    "the room and i'll find them. e.g. 'i'm raising a seed' or 'i need a "
+    "technical cofounder'."
+)
+
+_SMALL_TALK_PATTERNS = (
+    re.compile(
+        r"^\s*(hi|hello|hey|yo|sup|wassup|wsp|howdy|hiya|aloha|"
+        r"hi\s+\w+|hello\s+\w+|hey\s+\w+)[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(what'?s\s+up|good\s+(morning|afternoon|evening|night))[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(thanks|thank\s+you|ty|tysm|cool|nice|got\s+it|"
+        r"ok|okay|k|kk|lol|haha|lmao|nvm|never\s*mind)[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+)
+
+_INAPPROPRIATE_PATTERNS = (
+    re.compile(r"\bbaddies?\b", re.IGNORECASE),
+    re.compile(r"\bcuties?\b", re.IGNORECASE),
+    re.compile(r"\bhotties?\b", re.IGNORECASE),
+    re.compile(
+        r"\bhot\s+(?:girls?|guys?|men|women|chicks?|babes?|people|ones?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bhook[- ]?up\b", re.IGNORECASE),
+    re.compile(r"\btinder\b", re.IGNORECASE),
+)
+
+
+def _is_small_talk(message: str) -> bool:
+    if not message or not message.strip():
+        return True
+    return any(rgx.search(message) for rgx in _SMALL_TALK_PATTERNS)
+
+
+def _is_inappropriate(message: str) -> bool:
+    if not message:
+        return False
+    return any(rgx.search(message) for rgx in _INAPPROPRIATE_PATTERNS)
+
+
 def rank_and_riff(
     goal: str,
     candidates: list[dict[str, Any]],
@@ -151,6 +209,13 @@ def rank_and_riff(
     try:
         all_cands = list(candidates or [])
         recent_history = list(history or [])[-MAX_HISTORY_FOR_LLM:]
+
+        # Special intents short-circuit before retrieval/LLM.
+        if _is_inappropriate(message or ""):
+            return INAPPROPRIATE_REPLY
+        if _is_small_talk(message or ""):
+            return SMALL_TALK_REPLY
+
         mode = _route(message=message or "", candidates=all_cands)
 
         # Drill-in needs the full list so users can name anyone, not just the
