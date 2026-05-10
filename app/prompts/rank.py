@@ -49,17 +49,22 @@ Mode: DRILL_IN.
 The user named one attendee from a previous reply. Produce a tight bio +
 ONE literal opening line for THAT specific attendee.
 
+LENGTH BUDGET (CRITICAL — exceeding it cuts the opener off the SMS):
+- Bio paragraph: ≤80 WORDS. Count the words. Stop early if needed.
+- ≤480 CHARACTERS total across bio + opener.
+- The reply MUST contain BOTH the bio and the `Open with: "..."` line.
+  If you can't fit both, shorten the bio. Never omit the opener.
+
 Rules:
 - If a `drill_target:` line is present in the user payload, drill into THAT
   exact attendee — never substitute someone else, even if a different
   candidate seems more relevant to the goal.
-- ≤480 chars total.
 - Quote a 5-12 word phrase from one of the target's recent_posts in double
   quotes. If no recent_post has a specific quotable detail, name the
   subject of a post instead (a project, person, or place mentioned).
 
-REQUIRED FORMAT (the reply MUST end with this line, no exceptions):
-    <Name> — <2-3 sentence bio with concrete career edge>.
+REQUIRED FORMAT (the reply MUST end with this exact pattern, no exceptions):
+    <Name> — <≤80-word bio with concrete career edge>.
     Open with: "<the exact words the user should say to open the
     conversation>"
 

@@ -306,9 +306,12 @@ def _try_llm(
         temperature = 0.4
         max_tokens = 200
     else:
+        # drill_in: bumped 250 -> 350 so the model has room to finish
+        # the bio AND emit the literal `Open with: "..."` opener line
+        # before max_output_tokens cuts it off mid-bio.
         model = llm_client.MODEL_RANK
         temperature = 0.5
-        max_tokens = 250
+        max_tokens = 350
 
     reply = llm_client.chat(
         messages=messages,
@@ -344,7 +347,10 @@ def _try_llm(
     # quoted opener if the LLM forgot, rather than discarding the reply,
     # because the bio is usually still good.
     if mode in ("rapport", "drill_in"):
-        reply = _ensure_quoted_opener(reply=reply, candidates=candidates)
+        cap = MAX_RAPPORT_CHARS if mode == "rapport" else MAX_DRILL_CHARS
+        reply = _ensure_quoted_opener(
+            reply=reply, candidates=candidates, total_cap=cap
+        )
         # Cut anything the model emitted AFTER the quoted opener — it
         # tends to add a second bio block that gets clipped mid-word and
         # looks broken on the SMS. The opener is the contract; what
@@ -370,25 +376,34 @@ def _truncate_at_opener(reply: str) -> str:
 
 
 def _ensure_quoted_opener(
-    reply: str, candidates: list[dict[str, Any]]
+    reply: str,
+    candidates: list[dict[str, Any]],
+    total_cap: int,
 ) -> str:
-    """Return a reply guaranteed to end with `Open with: "…"`.
+    """Return a reply guaranteed to end with `Open with: "…"` and fit in `total_cap`.
 
-    If the LLM already provided a quoted opener (≥5 chars in the quotes),
-    leave it. If not, salvage: strip any unquoted opener line and append
-    a generic quoted opener that nudges toward the most recently quoted
-    snippet in the reply (or the first recent_post we can find).
+    If the LLM already produced a quoted opener (≥5 chars in the quotes),
+    leave it. Otherwise:
+      1. Strip any unquoted opener line ("Open with: AI tools").
+      2. Build a salvaged quoted opener from the most recently quoted
+         snippet in the reply, or the first recent_post we can find.
+      3. Trim the bio first so bio + opener fits inside total_cap —
+         otherwise the outer `_truncate_for_mode` would clip the opener
+         off and we'd ship "..." with no opener at all (the regression
+         this code is here to prevent).
     """
     if _OPENER_RE.search(reply):
         return reply
 
     logger.info("llm_reply.opener.salvaged")
 
-    # Strip any "Open with: ..." line that doesn't contain a quoted opener,
-    # then append a salvaged one.
-    cleaned = re.sub(
+    # Strip any unquoted "Open with: …" line, plus trailing punctuation /
+    # ellipsis the model may have left.
+    cleaned_bio = re.sub(
         r"\s*Open with:[^\n]*$", "", reply.rstrip(), flags=re.IGNORECASE
     ).rstrip(" .…—")
+    if not cleaned_bio:
+        cleaned_bio = "Worth grabbing 5 min"
 
     quoted = re.search(r'"([^"]{15,})"', reply)
     raw_hook = quoted.group(1) if quoted else _first_post_snippet(candidates)
@@ -405,7 +420,14 @@ def _ensure_quoted_opener(
             'working on this week?"'
         )
 
-    return f"{cleaned}.\n{opener}"
+    # Reserve room for the opener (+ ".\n" joiner) inside the cap. Without
+    # this, the outer truncate eats the opener and the user sees "...".
+    join_overhead = 2  # for ".\n"
+    bio_budget = max(40, total_cap - len(opener) - join_overhead)
+    if len(cleaned_bio) > bio_budget:
+        cleaned_bio = _word_boundary_trim(cleaned_bio, bio_budget)
+
+    return f"{cleaned_bio}.\n{opener}"
 
 
 def _first_post_snippet(candidates: list[dict[str, Any]]) -> str:
@@ -668,11 +690,39 @@ def _build_user_payload(
 
 
 def _truncate_for_mode(text: str, mode: str) -> str:
+    """Cap reply length per mode, but never clip the `Open with: "..."` line.
+
+    Drill-in + rapport replies must end in a complete quoted opener. A naive
+    char cap eats the closing quote when the bio runs long; we instead
+    trim the BIO portion to make room and stitch the opener back on intact.
+    """
     if mode == "drill_in":
-        return _truncate(text, MAX_DRILL_CHARS)
+        return _truncate_protecting_opener(text, MAX_DRILL_CHARS)
     if mode == "rapport":
-        return _truncate(text, MAX_RAPPORT_CHARS)
+        return _truncate_protecting_opener(text, MAX_RAPPORT_CHARS)
     return _truncate(text, MAX_LIST_CHARS)
+
+
+def _truncate_protecting_opener(text: str, cap: int) -> str:
+    """Cap to `cap` chars while keeping the `Open with: "..."` line intact."""
+    text = (text or "").strip()
+    if len(text) <= cap:
+        return text
+
+    m = _OPENER_RE.search(text)
+    if not m:
+        return _truncate(text, cap)
+
+    opener_start = m.start()
+    opener_line = text[opener_start : m.end()]
+    bio = text[:opener_start].rstrip()
+
+    join = "\n"
+    bio_budget = max(40, cap - len(opener_line) - len(join))
+    if len(bio) > bio_budget:
+        bio = _word_boundary_trim(bio, bio_budget)
+
+    return f"{bio}{join}{opener_line}"
 
 
 # ---------------------------------------------------------------------------
