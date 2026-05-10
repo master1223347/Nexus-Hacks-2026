@@ -7,3 +7,19 @@ __pycache__/
 .pytest_cache/
 
 # Real attendee data — has PII, never commit
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf
+.insforge/

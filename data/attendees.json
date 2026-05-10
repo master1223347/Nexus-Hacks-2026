@@ -1,6 +1,7 @@
 [
   {
     "name": "Aishwarya Gune",
+    "linkedin_url": "https://www.linkedin.com/in/aishwaryagune",
     "headline": "Software Engineer @ Teambridge",
     "company": "Teambridge",
     "recent_posts": [
@@ -8,11 +9,22 @@
       "Had a great time at YC Agent Jam '25, where she built Crunchy Cheese, an optimized GPU scheduler for ML workloads, and won first place in the Nivara track.",
       "Previously posted about Bestcard v1.1, including improvements for detailed earnings ordering by category."
     ],
-    "interests": ["agents", "hackathons", "ML workloads", "GPU scheduling", "product strategy", "market intelligence", "internal signal analysis", "credit card rewards", "event streaming"],
+    "interests": [
+      "agents",
+      "hackathons",
+      "ML workloads",
+      "GPU scheduling",
+      "product strategy",
+      "market intelligence",
+      "internal signal analysis",
+      "credit card rewards",
+      "event streaming"
+    ],
     "one_liner": "Software engineer at Teambridge who has recently been building agent and ML infrastructure projects, including a hackathon-winning GPU scheduler and Mosaic, a product strategy tool that placed second at OpenClaw."
   },
   {
     "name": "Anjan Narla",
+    "linkedin_url": "https://www.linkedin.com/in/anjan-narla",
     "headline": "Software engineer with 2+ years of experience building scalable, high performance systems",
     "company": "SJSU Spartan Recreation",
     "recent_posts": [
@@ -20,11 +32,21 @@
       "Public GitHub profile shows interest in Java, Spring Boot, DevOps, Flutter, and clean software design.",
       "GitHub projects include apps such as TicketUi, MemeGenerator, trailerapp, WeatherApp, neumorphicmusicui, and restaurantFinder."
     ],
-    "interests": ["software engineering", "Java", "Spring Boot", "DevOps", "Flutter", "mobile apps", "clean code", "scalable systems"],
+    "interests": [
+      "software engineering",
+      "Java",
+      "Spring Boot",
+      "DevOps",
+      "Flutter",
+      "mobile apps",
+      "clean code",
+      "scalable systems"
+    ],
     "one_liner": "Software engineer at SJSU Spartan Recreation with experience in scalable systems and a public project footprint across Java, Spring Boot, DevOps, Flutter, and mobile app development."
   },
   {
     "name": "Akshaj Uppala",
+    "linkedin_url": "https://www.linkedin.com/in/akshajuppala",
     "headline": "SWE @ Google",
     "company": "Google",
     "recent_posts": [
@@ -32,11 +54,21 @@
       "Mentioned joining Willa Chen Miller's team to work on Search products.",
       "Coauthored work featured in Communications of the ACM on monitoring urban trees across the U.S. using generative AI."
     ],
-    "interests": ["software engineering", "Google Search", "computer science", "generative AI", "urban visual computing", "satellite imagery", "environmental AI", "algorithms"],
+    "interests": [
+      "software engineering",
+      "Google Search",
+      "computer science",
+      "generative AI",
+      "urban visual computing",
+      "satellite imagery",
+      "environmental AI",
+      "algorithms"
+    ],
     "one_liner": "Google software engineer and Purdue CS master's graduate with research experience in generative AI for large scale urban tree monitoring."
   },
   {
     "name": "Almurtada Abdella",
+    "linkedin_url": "https://www.linkedin.com/in/almurtada",
     "headline": "Mechanical Engineer | Aerospace | Exploring AI & Robotics",
     "company": "Travnr",
     "recent_posts": [
@@ -44,11 +76,21 @@
       "Public portfolio highlights mechanical engineering work across CAD design, prototyping, and engineering projects.",
       "Older posts reference internship and professional growth in engineering."
     ],
-    "interests": ["mechanical engineering", "aerospace", "AI", "robotics", "travel tech", "CAD", "prototyping", "automation"],
+    "interests": [
+      "mechanical engineering",
+      "aerospace",
+      "AI",
+      "robotics",
+      "travel tech",
+      "CAD",
+      "prototyping",
+      "automation"
+    ],
     "one_liner": "Mechanical engineer and Travnr builder exploring AI, robotics, and travel tech, with a portfolio focused on CAD design, prototyping, and engineering projects."
   },
   {
     "name": "Andrii Drok",
+    "linkedin_url": "https://www.linkedin.com/in/andrii-drok-3896b522a",
     "headline": "Computer Science student at San Francisco State University",
     "company": "San Francisco State University",
     "recent_posts": [
@@ -56,11 +98,21 @@
       "Posted about co-packaged optics, AI factories, NVIDIA networking, and high performance AI infrastructure.",
       "Posted about NVIDIA and UK government AI infrastructure investment."
     ],
-    "interests": ["computer science", "cybersecurity", "data privacy", "AI infrastructure", "network engineering", "DevOps", "NVIDIA", "data centers"],
+    "interests": [
+      "computer science",
+      "cybersecurity",
+      "data privacy",
+      "AI infrastructure",
+      "network engineering",
+      "DevOps",
+      "NVIDIA",
+      "data centers"
+    ],
     "one_liner": "Computer science student focused on cybersecurity, network engineering, DevOps, and AI infrastructure topics like data center networking and co-packaged optics."
   },
   {
     "name": "Arjun Arora",
+    "linkedin_url": "https://www.linkedin.com/in/arjora",
     "headline": "Opennote (YC S25)",
     "company": "Opennote",
     "recent_posts": [
@@ -68,11 +120,20 @@
       "Public LinkedIn result points to Opennote, YC S25, and Santa Clara University.",
       "Profile appears startup and builder focused, based on Opennote and YC context."
     ],
-    "interests": ["startups", "education technology", "AI products", "YC", "software engineering", "builder tools", "student products"],
+    "interests": [
+      "startups",
+      "education technology",
+      "AI products",
+      "YC",
+      "software engineering",
+      "builder tools",
+      "student products"
+    ],
     "one_liner": "Builder at Opennote, a YC S25 company, with a Santa Clara University background and a likely focus on startup product development."
   },
   {
     "name": "Ayush Kumar",
+    "linkedin_url": "https://www.linkedin.com/in/ayukumar261",
     "headline": "Software engineer at ujet.cx",
     "company": "ujet.cx",
     "recent_posts": [
@@ -80,11 +141,18 @@
       "Public LinkedIn result lists experience at ujet.cx and education at University of Maryland.",
       "Profile is based in the San Francisco Bay Area."
     ],
-    "interests": ["software engineering", "customer experience technology", "backend systems", "product engineering", "San Francisco tech"],
+    "interests": [
+      "software engineering",
+      "customer experience technology",
+      "backend systems",
+      "product engineering",
+      "San Francisco tech"
+    ],
     "one_liner": "Bay Area software engineer at ujet.cx with a University of Maryland background, likely working around customer experience or product engineering systems."
   },
   {
     "name": "Buvani Pai",
+    "linkedin_url": "https://www.linkedin.com/in/buvanipai",
     "headline": "AI/ML Engineer",
     "company": "XDC Global",
     "recent_posts": [
@@ -92,11 +160,21 @@
       "Public profiles show AI/ML engineering focus, XDC Global experience, and Northwestern University background.",
       "Tableau and Behance profiles suggest a mix of AI/ML, data visualization, and design oriented work."
     ],
-    "interests": ["AI", "machine learning", "data visualization", "Tableau", "design", "computer science", "real world ML systems", "analytics"],
+    "interests": [
+      "AI",
+      "machine learning",
+      "data visualization",
+      "Tableau",
+      "design",
+      "computer science",
+      "real world ML systems",
+      "analytics"
+    ],
     "one_liner": "AI/ML engineer at XDC Global with a Northwestern background and public work signals across machine learning, data visualization, Tableau, and design."
   },
   {
     "name": "Cosmas Mandikonza",
+    "linkedin_url": "https://www.linkedin.com/in/cosmas-mandikonza-458a07233",
     "headline": "Incoming SWE intern @ LILA Sciences | Prev Production Engineering Fellow @ Meta | 5x hackathon winner",
     "company": "LILA Sciences",
     "recent_posts": [
@@ -104,11 +182,22 @@
       "MIT Solve profile lists him as cofounder of BridgedAI, an AI platform for special education paperwork and personalized learning.",
       "Notion creator profile says he builds practical AI tools and Notion systems for client delivery, workflow automation, and structured operations."
     ],
-    "interests": ["software engineering", "AI tools", "hackathons", "workflow automation", "special education technology", "testing", "product reliability", "Notion systems", "client delivery"],
+    "interests": [
+      "software engineering",
+      "AI tools",
+      "hackathons",
+      "workflow automation",
+      "special education technology",
+      "testing",
+      "product reliability",
+      "Notion systems",
+      "client delivery"
+    ],
     "one_liner": "Incoming LILA Sciences SWE intern, former Meta Production Engineering Fellow, and hackathon focused builder working on practical AI tools, product reliability, and education technology."
   },
   {
     "name": "Giovanni Amenta",
+    "linkedin_url": "https://www.linkedin.com/in/giovanniamenta",
     "headline": "Innovation Engineer | Bullish on America",
     "company": "Kasp",
     "recent_posts": [
@@ -116,11 +205,19 @@
       "Public LinkedIn result describes him as pursuing world changing goals in technology, entrepreneurship, and innovation.",
       "Company result links him to Kasp in San Francisco."
     ],
-    "interests": ["technology", "entrepreneurship", "innovation", "startups", "San Francisco tech", "company building"],
+    "interests": [
+      "technology",
+      "entrepreneurship",
+      "innovation",
+      "startups",
+      "San Francisco tech",
+      "company building"
+    ],
     "one_liner": "San Francisco based innovation engineer at Kasp focused on technology, entrepreneurship, and ambitious startup building."
   },
   {
     "name": "Henry Wang",
+    "linkedin_url": "https://www.linkedin.com/in/henry00c",
     "headline": "Researcher and software engineer working on people intelligence agents at Sixtyfour",
     "company": "Sixtyfour",
     "recent_posts": [
@@ -128,8 +225,223 @@
       "Resume lists him as a Software Engineering Intern at SixtyFour AI, building workflow infrastructure for AI go to market research agents.",
       "Personal site says he researches and builds ultra realistic AI clones and is interested in deeply individual collaborative agents."
     ],
-    "interests": ["people intelligence agents", "AI clones", "AI workforce", "software engineering", "workflow infrastructure", "go to market research agents", "computational neuroscience", "math", "wrestling"],
+    "interests": [
+      "people intelligence agents",
+      "AI clones",
+      "AI workforce",
+      "software engineering",
+      "workflow infrastructure",
+      "go to market research agents",
+      "computational neuroscience",
+      "math",
+      "wrestling"
+    ],
     "one_liner": "Sixtyfour engineer and UC Riverside CS student building people intelligence agents, workflow infrastructure, and ultra realistic AI clone systems."
+  },
+  {
+    "name": "Aryama Ray",
+    "linkedin_url": "https://www.linkedin.com/in/aryamaray",
+    "headline": "AI Engineer & Consultant | RAG Systems",
+    "company": "Independent AI consultant",
+    "recent_posts": [
+      "Public LinkedIn result says they build AI end to end and are building an AI application for mental health that won a hackathon and is on the path to launch.",
+      "Public GitHub profile describes work in RAG, agentic workflows, AI automation, and multimodal AI.",
+      "GitHub project Ergo Flow is described as a Google DeepMind Kaggle Hackathon project for healthier remote work."
+    ],
+    "interests": [
+      "AI engineering",
+      "RAG systems",
+      "agentic workflows",
+      "AI automation",
+      "multimodal AI",
+      "mental health AI",
+      "hackathons",
+      "data analytics",
+      "data science"
+    ],
+    "one_liner": "AI engineer and consultant specializing in RAG, agentic workflows, automation, and multimodal AI, currently building a hackathon winning mental health AI application."
+  },
+  {
+    "name": "Yifeng Xiao",
+    "linkedin_url": "https://www.linkedin.com/in/yifeng-xiao",
+    "headline": "EECS Ph.D. @ UC Berkeley | CPS, AI, Design Automation | Intern @ AWS",
+    "company": "UC Berkeley",
+    "recent_posts": [
+      "Public LinkedIn result says he is a Ph.D. student in EECS at UC Berkeley advised by Prof. Pierluigi Nuzzo.",
+      "A public LinkedIn post result says he presented at IEEE CDC.",
+      "Amazon Science profile lists a Yifeng Xiao as an applied scientist, but this may refer to a different person, so it should not be merged without confirmation."
+    ],
+    "interests": [
+      "cyber physical systems",
+      "AI",
+      "design automation",
+      "formal methods",
+      "systems research",
+      "control systems",
+      "EECS",
+      "AWS"
+    ],
+    "one_liner": "UC Berkeley EECS PhD student working at the intersection of cyber physical systems, AI, and design automation, with public signals around IEEE CDC and AWS internship experience."
+  },
+  {
+    "name": "Hari Kunamneni",
+    "linkedin_url": "https://www.linkedin.com/in/harikunamneni",
+    "headline": "SW Engineer with experience in full stack mobile application development",
+    "company": "Not clearly verified from public results",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public LinkedIn result says he has more than 10 years of software design, development, and implementation experience across agile and waterfall processes.",
+      "A hackathon portal result lists Hari Kunamneni on CareGuide, a voice AI agent for EHR informed lifestyle tips, but this should be treated as event specific context rather than full profile identity unless confirmed."
+    ],
+    "interests": [
+      "software engineering",
+      "full stack development",
+      "mobile applications",
+      "agile development",
+      "waterfall development",
+      "voice AI",
+      "healthcare AI",
+      "EHR workflows"
+    ],
+    "one_liner": "Software engineer with 10+ years of full stack and mobile development experience, with a possible recent hackathon signal around voice AI for healthcare lifestyle guidance."
+  },
+  {
+    "name": "Jing Huang",
+    "linkedin_url": "https://www.linkedin.com/in/jingqhuang",
+    "headline": "Purdue University Daniels School of Business",
+    "company": "Not clearly verified from public results",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public LinkedIn result for the provided profile shows Purdue University Daniels School of Business and San Francisco Bay Area.",
+      "Search results contain many other Jing Huang profiles in AI, Google, Amazon, and bioinformatics, so those should not be merged into this profile without confirmation."
+    ],
+    "interests": [
+      "business",
+      "Purdue University",
+      "San Francisco Bay Area",
+      "product",
+      "analytics",
+      "technology"
+    ],
+    "one_liner": "San Francisco Bay Area professional connected to Purdue University Daniels School of Business; public data is thin, so avoid over personalizing beyond business and technology adjacent context."
+  },
+  {
+    "name": "Miller Norris",
+    "linkedin_url": "https://www.linkedin.com/in/miller-norris-134b56269",
+    "headline": "Building in San Francisco | 19 yr old Founder of Dsgkids",
+    "company": "Dsgkids",
+    "recent_posts": [
+      "Posted about moving to San Francisco to build a billion dollar company and change education.",
+      "Posted about attending events, pitch nights, hackathons, speaker events, and meeting founders and investors during his first week in San Francisco.",
+      "Posted about being a 19 year old entrepreneur who came to San Francisco with limited money and now claims his business is worth over two million."
+    ],
+    "interests": [
+      "entrepreneurship",
+      "education",
+      "financial education",
+      "San Francisco startups",
+      "storytelling",
+      "content creation",
+      "venture capital",
+      "hackathons",
+      "founder networking"
+    ],
+    "one_liner": "19 year old founder building Dsgkids in San Francisco, focused on education, financial literacy, storytelling, and aggressive founder networking."
+  },
+  {
+    "name": "Leon Correia",
+    "linkedin_url": "https://www.linkedin.com/in/leon-correia-383358192",
+    "headline": "Data Engineering & Agentic AI | prev @ cdk",
+    "company": "Saayam For All",
+    "recent_posts": [
+      "Shared a new role as a Teaching Assistant for Distributed Systems for Data Engineering at San José State University.",
+      "Public LinkedIn result says he specializes in architecting scalable systems that turn complex data into operational workflows.",
+      "Public profile directory result links him to data engineering, agentic AI, and previous CDK experience."
+    ],
+    "interests": [
+      "data engineering",
+      "agentic AI",
+      "distributed systems",
+      "scalable systems",
+      "operational workflows",
+      "San José State University",
+      "data infrastructure"
+    ],
+    "one_liner": "Data engineering and agentic AI builder connected to Saayam For All and SJSU, with public signals around scalable systems and distributed data engineering."
+  },
+  {
+    "name": "Hung-Yu Chin",
+    "linkedin_url": "https://www.linkedin.com/in/hungyuchin",
+    "headline": "Commodity Controller at Dell Technologies",
+    "company": "Dell Technologies",
+    "recent_posts": [
+      "No clearly public recent LinkedIn posts found from the available results.",
+      "Public LinkedIn result lists experience at Dell Technologies.",
+      "Public LinkedIn result lists education at Queen Mary University of London and location in Taipei."
+    ],
+    "interests": [
+      "commodity control",
+      "supply chain",
+      "Dell Technologies",
+      "finance",
+      "operations",
+      "hardware business",
+      "Taipei tech ecosystem"
+    ],
+    "one_liner": "Dell Technologies commodity controller in Taipei with a Queen Mary University of London background and likely interests around hardware operations, supply chain, and finance."
+  },
+  {
+    "name": "Richa Pragat",
+    "linkedin_url": "https://www.linkedin.com/in/richa-pragat",
+    "headline": "Incoming @ Amazon | Carnegie Mellon '26 | CMU Social Media Ambassador | Animal Advocate",
+    "company": "Amazon",
+    "recent_posts": [
+      "Posted about becoming a Lovable campus ambassador and organizing a February hackathon at Carnegie Mellon University where Lovable was a core sponsor.",
+      "Posted reflections on UX 3.0, vibecoding, and how AI shifts product work from just designing screens to designing behavior and trust.",
+      "Posted about learning product management from Vidya Srinivasan and emphasizing asking why, curiosity, and storytelling in product thinking."
+    ],
+    "interests": [
+      "product management",
+      "Amazon",
+      "Carnegie Mellon",
+      "AI builders",
+      "Lovable",
+      "vibecoding",
+      "UX",
+      "behavior design",
+      "trust design",
+      "hackathons",
+      "animal advocacy"
+    ],
+    "one_liner": "Incoming Amazon product focused CMU student and social media ambassador active in AI builder communities, hackathons, Lovable, UX 3.0, and product storytelling."
+  },
+  {
+    "name": "Sachin Keswani",
+    "linkedin_url": "https://www.linkedin.com/in/sachinkeswani",
+    "headline": "Senior Product Manager at Nutanix",
+    "company": "Nutanix",
+    "recent_posts": [
+      "Hackathon portal lists him as team lead and Senior Product Manager at Nutanix, driving AI Factory, Cloud Native Kubernetes, and Private Cloud Growth.",
+      "Hackathon project context says he designed architecture connecting CopilotKit, LlamaIndex, FAISS, and Composio for a BOM upload to datasheet ingestion to scoring to Google Sheets workflow.",
+      "Podcast and consultant profiles describe him as a semiconductor and AI professional with experience across CPU, GPU, silicon development, SoC/IP integration, and product management."
+    ],
+    "interests": [
+      "AI infrastructure",
+      "AI Factory",
+      "cloud native",
+      "Kubernetes",
+      "private cloud",
+      "semiconductors",
+      "CPU",
+      "GPU",
+      "SoC",
+      "product management",
+      "performance optimization",
+      "pickleball",
+      "golf",
+      "travel"
+    ],
+    "one_liner": "Senior Product Manager at Nutanix focused on AI Factory, Kubernetes, and private cloud growth, with deep semiconductor experience across CPU, GPU, SoC, and performance optimization."
   }
 ]
 

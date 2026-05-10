@@ -44,7 +44,10 @@ _retrieval_module: Any = _safe_import("app.retrieval")
 logger = logging.getLogger("wingman.orchestrator")
 
 RETRIEVAL_TIMEOUT_S = 5.0
-LLM_TIMEOUT_S = 1.5
+# Gemini Flash Lite cold-start ~1.7s, warm ~1.1s, observed outliers up to
+# ~5.7s. 3.0s covers both cold-start and warm calls without letting tail
+# latency cascade into a 7s SMS RTT.
+LLM_TIMEOUT_S = 3.0
 FALLBACK_REPLY = "one sec — give me another nudge"
 DEFAULT_TOP_K = 10
 

@@ -212,6 +212,33 @@ INAPPROPRIATE_REPLY = (
     "technical cofounder'."
 )
 
+SMALL_TALK_REPLY = (
+    "hey! tell me what you're hunting and i'll point you somewhere — try "
+    "'find me ML engineers', 'anyone from CMU', or 'anyone fun to grab a "
+    "drink with'."
+)
+
+# Greetings + empty-intent acks. Short, low-content messages that should
+# get an onboarding reply instead of being treated as a search goal.
+_SMALL_TALK_PATTERNS = (
+    re.compile(
+        r"^\s*(hi|hello|hey|yo|sup|wassup|wsp|howdy|hiya|aloha|"
+        r"hi\s+\w+|hello\s+\w+|hey\s+\w+)[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(what'?s\s+up|good\s+(morning|afternoon|evening|night))"
+        r"[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(thanks|thank\s+you|ty|tysm|cool|nice|got\s+it|"
+        r"ok|okay|k|kk|lol|haha|lmao|nvm|never\s*mind)[\s!?.,]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*(help|what\s+do\s+i\s+do|how\s+do\s+i\s+use\s+this)[\s!?.,]*$", re.IGNORECASE),
+)
+
 # Tiebreaker for rapport: when one of these terms appears in the message,
 # the user has a concrete filter even if the message is socially framed
 # ("anyone fun who works at meta" -> initial, not rapport).
@@ -324,6 +351,11 @@ def rank_and_riff(
         if mode == "inappropriate_query":
             return INAPPROPRIATE_REPLY
 
+        # Small talk (greetings, acks, "help"): hardcoded onboarding reply,
+        # zero LLM cost, no retrieval, no goal stored.
+        if mode == "small_talk":
+            return SMALL_TALK_REPLY
+
         # Meta questions bypass attendee ranking entirely — answer from the
         # event_meta context, never poison the user's goal.
         if mode == "meta_question":
@@ -402,6 +434,9 @@ def _route(message: str, candidates: list[dict[str, Any]]) -> str:
     if _is_inappropriate(msg):
         return "inappropriate_query"
 
+    if _is_small_talk(msg):
+        return "small_talk"
+
     if any(verb in lowered for verb in _DRILL_VERBS):
         return "drill_in"
     if _match_candidate(message=msg, candidates=candidates) is not None:
@@ -424,6 +459,17 @@ def _is_inappropriate(message: str) -> bool:
     if not message:
         return False
     return any(rgx.search(message) for rgx in _INAPPROPRIATE_PATTERNS)
+
+
+def _is_small_talk(message: str) -> bool:
+    """True iff the message is a greeting, ack, or low-content noise.
+
+    Short messages that match a greeting/ack regex skip retrieval entirely
+    and get a hardcoded onboarding reply.
+    """
+    if not message or not message.strip():
+        return True
+    return any(rgx.search(message) for rgx in _SMALL_TALK_PATTERNS)
 
 
 def _is_meta_question(message: str) -> bool:
@@ -477,7 +523,7 @@ def should_persist_goal(message: str) -> bool:
                 set_goal(from_phone, goal)
     """
     intent = classify_intent(message)
-    return intent not in ("meta_question", "inappropriate_query")
+    return intent not in ("meta_question", "inappropriate_query", "small_talk")
 
 
 # ---------------------------------------------------------------------------
