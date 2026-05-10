@@ -33,13 +33,22 @@ BASE_PHONE = "+15555550{:03d}"
 BEAT_1 = "I'm raising a seed for med-tech AI."
 BEAT_3 = "Anyone fun to grab a drink with?"
 
-# Try to extract the first attendee name from beat 1's reply, fall back to a
-# safe placeholder when the reply doesn't expose a Pane-2 candidate name.
-NAME_RE = re.compile(r"^\s*1\)\s*(?P<name>[^—\-\n]+?)\s*[—\-]", re.MULTILINE)
+# Try to extract the first attendee name from beat 1's reply. Supports both
+# old numbered format ("1) Name — ...") and current sentence format
+# ("Name looks strong: ...").
+NAME_NUMBERED_RE = re.compile(r"^\s*1\)\s*(?P<name>[^—\-\n]+?)\s*[—\-]", re.MULTILINE)
+NAME_SENTENCE_RE = re.compile(
+    r"(?P<name>[A-Z][A-Za-z'`\-]+(?:\s+[A-Z][A-Za-z'`\-]+){0,2})\s+looks\s+strong:",
+    re.MULTILINE,
+)
 
 
 def _extract_first_name(reply_text: str) -> str:
-    m = NAME_RE.search(reply_text or "")
+    text = reply_text or ""
+    m = NAME_NUMBERED_RE.search(text)
+    if m:
+        return m.group("name").strip()
+    m = NAME_SENTENCE_RE.search(text)
     if m:
         return m.group("name").strip()
     # Fallback to demo-shaped reply with "Sarah Chen" / "Marcus Patel" / etc.

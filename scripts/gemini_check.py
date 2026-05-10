@@ -1,6 +1,7 @@
 """Quick Gemini smoke + quota check.
 
-  python3 scripts/gemini_check.py
+Usage:
+  . .venv/bin/activate && python scripts/gemini_check.py
 """
 from __future__ import annotations
 
@@ -9,10 +10,13 @@ import sys
 import time
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(".env")
 
-from google import genai
-from google.genai import errors
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from app import llm_client  # noqa: E402
 
 
 def main() -> int:
@@ -21,32 +25,27 @@ def main() -> int:
         print("FAIL: GEMINI_API_KEY not set in env")
         return 1
 
-    client = genai.Client(api_key=api_key)
-    model = "gemini-2.5-flash-lite"
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    os.environ["OPENAI_API_KEY"] = ""
 
     t0 = time.time()
-    try:
-        r = client.models.generate_content(
-            model=model,
-            contents="Reply with exactly the word: pong",
-        )
-    except errors.APIError as e:
-        ms = int((time.time() - t0) * 1000)
+    out = llm_client.chat(
+        messages=[{"role": "user", "content": "Reply with exactly the word: pong"}],
+        model=model,
+        temperature=0.0,
+        max_tokens=8,
+        timeout_s=4.0,
+    )
+    ms = int((time.time() - t0) * 1000)
+    if not out:
         print(f"FAIL after {ms}ms")
-        print(f"  type:    {type(e).__name__}")
-        print(f"  status:  {getattr(e, 'code', 'unknown')}")
-        print(f"  message: {e}")
-        if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
-            print()
-            print("DIAGNOSIS: free tier quota exhausted.")
-            print("FIX: upgrade to pay-as-you-go at https://aistudio.google.com/apikey")
+        print("  message: empty/failed response (check logs for HTTP status/quota).")
+        print("  diagnosis: key/model/quota issue or transient network error.")
         return 2
 
-    ms = int((time.time() - t0) * 1000)
     print(f"OK after {ms}ms")
     print(f"  model:    {model}")
-    print(f"  reply:    {r.text[:80]!r}")
-    print(f"  prompt_tokens: {r.usage_metadata.prompt_token_count if r.usage_metadata else '?'}")
+    print(f"  reply:    {out[:80]!r}")
     return 0
 
 
